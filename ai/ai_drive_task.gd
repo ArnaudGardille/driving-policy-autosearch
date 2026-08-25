@@ -46,7 +46,7 @@ extends BTAction
 ## very sensitive -- too strong a gain makes steering twitchy/oscillatory
 ## and made things worse; keep this low. 0 disables it (fixed look_ahead).
 @export var lookahead_min: float = 3.0
-@export var lookahead_curvature_gain: float = 0.0
+@export var lookahead_curvature_gain: float = 0.25
 ## Extra emergency braking once the car strays this many meters off the
 ## centerline, regardless of curvature, as a last-resort safety margin
 ## before a wheel can reach the physical edge of the road.
