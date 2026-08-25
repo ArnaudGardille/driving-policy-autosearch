@@ -165,7 +165,10 @@ and re-run to reproduce its exact score.
 
 **Timeout**: budget ~5-6 minutes wall-clock per experiment (3 vehicles ×
 ~68s racing+countdown, plus engine startup). If a run meaningfully exceeds
-that, kill it, log `crash`, and revert.
+that, kill it, log `crash`, and revert. If your tool invocation has its own
+default command timeout (e.g. a coding agent's shell tool defaulting to
+~120s), raise it explicitly (~400s) for the eval command — the default is
+not enough and will truncate `run.log` mid-run.
 
 **NEVER STOP** (once past setup): don't pause to ask "should I keep going?".
 Iterate until the human interrupts you. If out of ideas: re-read
