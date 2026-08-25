@@ -51,6 +51,28 @@ static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = 
 	var fell_off := false
 	var fall_distance_m := -1.0
 
+	# Fairness enforcement: the allowlist (tools/check_allowlist.sh) stops a
+	# candidate from editing vehicle.gd/race_manager.gd, but nothing stops
+	# code living inside the allowed ai_drive_task.gd from just calling
+	# car.engine_force / car.steering with values a human could never reach
+	# (e.g. bumping its own "engine_power" export past the player's actual
+	# ceiling). Since ai_drive_task.gd fully owns those properties every
+	# tick while the AI drives (vehicle.gd's own _physics_process is
+	# disabled), a file-level allowlist alone cannot catch that -- so this
+	# checks the ACTUAL applied values against the car's own frozen physics
+	# constants every tick, regardless of what the policy script claims.
+	# Steering ceiling comes directly from the car (vehicle.gd's STEER_LIMIT
+	# const), so it stays correct even if that constant ever changes.
+	# Engine force ceiling is 100.0: vehicle.gd's own low-speed torque boost
+	# is clampf(engine_force_value * 5.0 / speed, 0.0, 100.0), so 100.0 is
+	# the highest engine_force a human can ever get from any speed, and is
+	# therefore the correct fairness ceiling independent of speed or vehicle.
+	const _ENGINE_FORCE_CEILING := 100.0
+	const _FAIRNESS_TOLERANCE := 0.01
+	var steer_limit: float = vehicle.STEER_LIMIT
+	var max_abs_engine_force := 0.0
+	var max_abs_steering := 0.0
+
 	var total_ticks := int((race_scene.COUNTDOWN_DURATION + racing_seconds) * Engine.physics_ticks_per_second)
 
 	for i in range(total_ticks):
@@ -63,6 +85,9 @@ static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = 
 		if car_global.y < race_scene._fall_kill_y and not fell_off:
 			fell_off = true
 			fall_distance_m = race_scene._total_distance
+
+		max_abs_engine_force = maxf(max_abs_engine_force, absf(vehicle.engine_force))
+		max_abs_steering = maxf(max_abs_steering, absf(vehicle.steering))
 
 		var car_local: Vector3 = path.global_transform.affine_inverse() * car_global
 		var closest_offset: float = path.curve.get_closest_offset(car_local)
@@ -80,6 +105,10 @@ static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = 
 		var speed: float = vehicle.linear_velocity.length()
 		sum_speed += speed
 		max_speed = maxf(max_speed, speed)
+
+	var fair_steering: bool = max_abs_steering <= steer_limit + _FAIRNESS_TOLERANCE
+	var fair_engine_force: bool = max_abs_engine_force <= _ENGINE_FORCE_CEILING + _FAIRNESS_TOLERANCE
+	var fair: bool = fair_steering and fair_engine_force
 
 	# race_manager's own state machine actually ran (fall/finish/off-track
 	# checks included), so infer the outcome from its own thresholds rather
@@ -113,6 +142,11 @@ static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = 
 		"reason": reason,
 		"race_time_s": race_time,
 		"score": score,
+		"fair": fair,
+		"max_steering_used": max_abs_steering,
+		"steer_limit": steer_limit,
+		"max_engine_force_used": max_abs_engine_force,
+		"engine_force_ceiling": _ENGINE_FORCE_CEILING,
 	}
 
 	race_scene.queue_free()

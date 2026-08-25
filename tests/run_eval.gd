@@ -74,6 +74,15 @@ func _init() -> void:
 				self, racing_seconds, overrides, VEHICLE_SCENES[key])
 		per_vehicle[key] = result
 		scores.append(result.get("score", 0.0))
+		if not result.get("fair", false):
+			# A run that exceeds the human's own steering/engine-force
+			# ceiling is not a legitimate result, no matter how good its
+			# score looks -- fail the whole eval rather than let an unfair
+			# run's score sneak into the aggregate.
+			ok = false
+			push_error("FAIRNESS VIOLATION on '%s': max_steering_used=%.3f (limit %.3f), max_engine_force_used=%.3f (ceiling %.3f)" % [
+				key, result.get("max_steering_used", 0.0), result.get("steer_limit", 0.0),
+				result.get("max_engine_force_used", 0.0), result.get("engine_force_ceiling", 0.0)])
 
 	var mean_score := 0.0
 	var min_score := 0.0
