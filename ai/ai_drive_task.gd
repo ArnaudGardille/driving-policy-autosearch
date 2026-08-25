@@ -25,7 +25,7 @@ extends BTAction
 ## 0.75 was found (by benchmark) to be the point where further increases
 ## stop helping -- the remaining limit past that is the shared max_steer
 ## kinematic turning radius, not correction strength.
-@export var cross_track_gain: float = 0.75
+@export var cross_track_gain: float = 0.5
 ## Vertical/horizontal slope ratio above which the AI treats the path as a
 ## climb or descent (ramp) and slows down for it.
 @export var slope_speed_threshold: float = 0.25
