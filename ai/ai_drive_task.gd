@@ -69,6 +69,27 @@ extends BTAction
 ## How long (seconds) a recovery maneuver reverses for before trying forward
 ## again.
 @export var recovery_reverse_time: float = 1.2
+## Shortcut-cutting: some tracks loop close to themselves in the horizontal
+## plane even though the two nearby points are far apart ALONG the track --
+## detected here generically from the curve's own baked geometry (the same
+## curve data this policy already has legitimate access to for steering/
+## braking) rather than hardcoded to a specific location. A human who
+## notices the track loops back on itself and drives straight across can do
+## the same thing with the same car and controls, so this isn't a track/car
+## advantage, just noticing something fixed centerline-following never looks
+## for. Filtered on HORIZONTAL distance and a small elevation match, not raw
+## 3D distance -- a pair of points can be "close" in 3D purely because one
+## is on a switchback directly above/below the other, which is a cliff, not
+## a shortcut (found the hard way: an earlier version of this used raw 3D
+## distance and drove every vehicle straight off exactly such a cliff).
+@export var enable_shortcut: bool = true
+@export var shortcut_min_gap: float = 30.0
+@export var shortcut_max_crossing: float = 12.0
+@export var shortcut_max_elevation_delta: float = 1.5
+@export var shortcut_trigger_radius: float = 6.0
+## Speed to hold while off-road crossing a shortcut (curvature/braking logic
+## doesn't apply off the track, so this is a fixed, conservative target).
+@export var shortcut_speed: float = 8.0
 
 ## Tracks the car's progress along the curve between ticks. Curve3D's own
 ## get_closest_offset() does a GLOBAL nearest-point search: on a track that
@@ -86,6 +107,15 @@ var _stuck_timer: float = 0.0
 ## Counts down while a recovery (reverse) maneuver is in progress; >0 means
 ## "currently recovering".
 var _recovery_timer: float = 0.0
+
+## Best shortcut found by _find_best_shortcut(), or -1.0 if not yet computed
+## (lazily, once, on the first tick with a valid curve) or none exists.
+var _shortcut_checked: bool = false
+var _shortcut_entry_offset: float = -1.0
+var _shortcut_exit_offset: float = -1.0
+## True while actively driving off-path across a shortcut, overriding the
+## normal path-following steering/throttle below.
+var _taking_shortcut: bool = false
 
 
 func _tick(delta: float) -> int:
@@ -106,10 +136,26 @@ func _drive(car: VehicleBody3D, path: Path3D, delta: float) -> void:
 
 	var total_length: float = curve.get_baked_length()
 
-	# Find current position along the curve (continuous localization).
+	if enable_shortcut and not _shortcut_checked:
+		_shortcut_checked = true
+		_find_best_shortcut(curve, total_length)
+
 	var car_global: Vector3 = car.global_position
 	var car_local: Vector3 = path.global_transform.affine_inverse() * car_global
+
+	if _taking_shortcut:
+		_drive_shortcut(car, path, curve)
+		return
+
+	# Find current position along the curve (continuous localization).
 	var current_offset: float = _localize(curve, car_local, total_length)
+
+	if enable_shortcut and _shortcut_entry_offset >= 0.0 \
+			and current_offset >= _shortcut_entry_offset - shortcut_trigger_radius \
+			and current_offset < _shortcut_exit_offset - shortcut_trigger_radius:
+		_taking_shortcut = true
+		_drive_shortcut(car, path, curve)
+		return
 
 	# --- Curvature: immediate (for steering) and previewed-ahead (for braking) ---
 	var dir_current := _sample_direction(curve, current_offset, total_length)
@@ -248,6 +294,72 @@ func _localize(curve: Curve3D, car_local: Vector3, total_length: float) -> float
 
 	_known_offset = best_offset
 	return best_offset
+
+
+## Scans the whole baked curve once for the pair of offsets that are farthest
+## apart ALONG the track but closest together HORIZONTALLY, at roughly the
+## same elevation -- a self-intersecting loop a human can walk straight
+## across, the same thing a human notices just by looking at the track
+## shape. Judges closeness on the horizontal (XZ) plane with a small
+## elevation-match requirement, NOT raw 3D distance: two points can be close
+## in 3D purely because one sits on a switchback directly above/below the
+## other, which is a cliff to drive off, not a shortcut to drive across.
+## Keeps the single best candidate (by offset gap) that's within
+## shortcut_max_crossing/shortcut_max_elevation_delta. O((length/step)^2),
+## but only ever runs once per race, so a coarse step is fine.
+func _find_best_shortcut(curve: Curve3D, total_length: float) -> void:
+	var step := 5.0
+	var best_gap := 0.0
+	var best_a := -1.0
+	var best_b := -1.0
+	var offset_a := 0.0
+	while offset_a < total_length:
+		var point_a: Vector3 = curve.sample_baked(offset_a)
+		var offset_b: float = offset_a + shortcut_min_gap
+		while offset_b < total_length:
+			var point_b: Vector3 = curve.sample_baked(offset_b)
+			var horizontal_dist := Vector2(point_a.x, point_a.z).distance_to(Vector2(point_b.x, point_b.z))
+			var elevation_delta := absf(point_a.y - point_b.y)
+			if horizontal_dist < shortcut_max_crossing and elevation_delta < shortcut_max_elevation_delta:
+				var gap: float = offset_b - offset_a
+				if gap > best_gap:
+					best_gap = gap
+					best_a = offset_a
+					best_b = offset_b
+			offset_b += step
+		offset_a += step
+	_shortcut_entry_offset = best_a
+	_shortcut_exit_offset = best_b
+
+
+## Drives straight for the shortcut's exit point instead of following the
+## path, using the same steering/throttle control surface as normal driving
+## (just aimed off-road). Ends the shortcut once close enough to the exit
+## for normal path-following to safely re-lock onto it.
+func _drive_shortcut(car: VehicleBody3D, path: Path3D, curve: Curve3D) -> void:
+	var exit_local: Vector3 = curve.sample_baked(_shortcut_exit_offset)
+	var exit_global: Vector3 = path.global_transform * exit_local
+	var car_local: Vector3 = path.global_transform.affine_inverse() * car.global_position
+
+	if car_local.distance_to(exit_local) < shortcut_trigger_radius:
+		_taking_shortcut = false
+		_known_offset = _shortcut_exit_offset
+		return
+
+	var car_transform: Transform3D = car.global_transform
+	var local_target: Vector3 = car_transform.affine_inverse() * exit_global
+	car.steering = clampf(atan2(local_target.x, local_target.z), -max_steer, max_steer)
+
+	var current_speed: float = car.linear_velocity.length()
+	if current_speed < shortcut_speed:
+		if current_speed < 5.0 and not is_zero_approx(current_speed):
+			car.engine_force = clampf(engine_power * 5.0 / current_speed, 0.0, 100.0)
+		else:
+			car.engine_force = engine_power
+		car.brake = 0.0
+	else:
+		car.engine_force = 0.0
+		car.brake = clampf((current_speed - shortcut_speed) * 0.5, 0.0, 5.0)
 
 
 ## Scans a window ahead of the car and returns the sharpest curvature found,
