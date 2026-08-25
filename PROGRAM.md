@@ -1,0 +1,122 @@
+# autoresearch: AI driving policy
+
+Adapted from [karpathy/autoresearch](https://github.com/karpathy/autoresearch)'s
+`program.md` pattern to this project's task. An agent (human-prompted coding
+agent, e.g. Claude Code, Codex, or Ziva itself) reads this file and runs the
+experiment loop autonomously using its own normal tool access (edit files,
+run shell commands, git) — there is no separate framework/binary to install.
+
+## Setup
+
+To set up a new experiment run, work with the user to:
+
+1. **Agree on a run tag**: propose a tag based on today's date (e.g. `aug25`).
+   The branch `autoresearch/<tag>` must not already exist — this is a fresh run.
+2. **Create the branch**: `git checkout -b autoresearch/<tag>` from current master.
+3. **Read the in-scope files**:
+   - `res://ai/README_RESEARCH.md` — the full contract: objective, scoring
+     formula, what may/mayn't change, sensing caveat.
+   - `res://ai/ai_drive_task.gd` — the file you modify.
+   - `res://race/race_manager.gd` — read-only reference for `compute_score()`
+     (the ground-truth metric) and the fairness constants (`STEER_LIMIT`
+     equivalent, track width, etc).
+4. **Initialize results.tsv**: create `results.tsv` (repo root, untracked —
+   see `.gitignore`) with just the header row.
+5. **Confirm and go.**
+
+## Experimentation
+
+Each experiment is scored by a single headless command, run from the repo root:
+
+```
+<godot-binary> --headless --path . --script res://tests/run_eval.gd -- \
+    --seconds=65 --vehicles=car_base,trailer_truck,tow_truck
+```
+
+This runs a full deterministic race for each of the three vehicles (a human
+can drive any of them) and prints one line of JSON as the LAST line of
+stdout (Godot prints a version banner first).
+
+**What you CAN do:**
+- Modify `res://ai/ai_drive_task.gd`, or add new files under `res://ai/` —
+  this is the only place you edit. Everything about the driving algorithm is
+  fair game: steering logic, braking logic, localization, lookahead,
+  whatever. The policy may only actuate the car through the same control
+  surface a human uses (steering clamped to `max_steer`, engine force,
+  brake) — never write `global_position`/`linear_velocity` directly, never
+  touch physics flags, never read/write `race_manager.gd` state.
+
+**What you CANNOT do:**
+- Modify anything under `res://vehicles/` (car physics — this is the "same
+  car as the human" guarantee), `res://race/race_manager.gd` (the referee),
+  the racetrack scene, or `res://tests/*.gd` (the judge). These are frozen.
+  **Before every commit, run `tools/check_allowlist.sh`** — if it rejects
+  your diff, you have gone out of bounds; fix it before committing.
+- Loosen the AI's sensing beyond what it already has (direct `Path3D` curve
+  access) without flagging it explicitly as a sensing change, not a driving
+  improvement — see the caveat in `README_RESEARCH.md`.
+
+**The goal: maximize `aggregate_score`** (the MINIMUM `score` across the
+three vehicles, not the mean — a policy that only drives well in its
+favorite car is not a better policy). Recall the scoring shape: below 1.0
+for any run that doesn't finish the track, at or above 1.0 for any run that
+does (faster finishes score higher, up to 2.0). The only hard constraints:
+it must not fall off, and it must not cheat (no car/track advantage over
+the human, no bypassing the actuation surface).
+
+**Simplicity criterion**: all else being equal, simpler is better. A small
+score improvement that adds a pile of special-cased hacks is not obviously
+worth it — weigh it the same way you'd weigh a `val_bpb` win against added
+complexity in the original autoresearch. Removing a knob and keeping the
+same score is a genuine simplification win.
+
+**The first run**: always establish the baseline first, on the current
+(unmodified) `ai_drive_task.gd`.
+
+## Logging results
+
+Log every experiment to `results.tsv` (tab-separated, NOT comma — commas
+break in descriptions). Columns:
+
+```
+commit	aggregate_score	mean_score	status	description
+```
+
+1. git commit hash (short, 7 chars)
+2. `aggregate_score` from the eval JSON (e.g. `1.223000`) — use `0.000000`
+   for crashes
+3. `mean_score` from the eval JSON, same format
+4. status: `keep`, `discard`, or `crash`
+5. short text description of what this experiment tried
+
+## The experiment loop
+
+LOOP:
+
+1. Look at git state (current branch/commit).
+2. Tune `res://ai/ai_drive_task.gd` with one experimental idea.
+3. `tools/check_allowlist.sh` — must pass before committing.
+4. `git commit`
+5. Run the eval command above, capturing stdout: `... > run.log 2>&1`
+   (redirect everything, don't let output flood context).
+6. Parse the LAST line of `run.log` as JSON. Read `ok`, `aggregate_score`,
+   `mean_score`.
+7. If `ok` is false or the run crashed/timed out, treat as a crash: log
+   status `crash`, `git reset --hard` back to the pre-experiment commit,
+   and move on (fix-and-retry only if the cause is a trivial, obvious bug).
+8. If `aggregate_score` improved, keep it (advance the branch, commit stays).
+9. If `aggregate_score` is equal or worse, `git reset --hard` back to the
+   commit before this experiment (discard).
+10. Record the outcome in `results.tsv`. Repeat.
+
+**Timeout**: budget ~5-6 minutes wall-clock per experiment (3 vehicles ×
+~68s racing+countdown, plus engine startup). If a run meaningfully exceeds
+that, kill it, log `crash`, and revert.
+
+**NEVER STOP** (once past setup): don't pause to ask "should I keep going?".
+Iterate until the human interrupts you. If out of ideas: re-read
+`ai_drive_task.gd`'s own comments for previously-tried-and-reverted ideas
+(don't blindly repeat them without a new angle), try combining two small
+wins, try a different corner of the track (inspect telemetry from
+`res://tests/ai_benchmark.gd`'s richer per-tick metrics if you need more
+signal than the aggregate).
