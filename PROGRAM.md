@@ -20,8 +20,12 @@ To set up a new experiment run, work with the user to:
    - `res://race/race_manager.gd` — read-only reference for `compute_score()`
      (the ground-truth metric) and the fairness constants (`STEER_LIMIT`
      equivalent, track width, etc).
-4. **Initialize results.tsv**: create `results.tsv` (repo root, untracked —
-   see `.gitignore`) with just the header row.
+4. **Initialize results.tsv**: create `results.tsv` (repo root) with just the
+   header row, and commit it. Unlike upstream `autoresearch`, this file IS
+   tracked in git (not gitignored) — it's the permanent, replayable record
+   of every experiment tried, including discarded and crashed ones, not
+   just a local scratch log. See "The experiment loop" below for exactly
+   when it gets committed.
 5. **Confirm and go.**
 
 ## Experimentation
@@ -89,43 +93,75 @@ same score is a genuine simplification win.
 
 ## Logging results
 
-Log every experiment to `results.tsv` (tab-separated, NOT comma — commas
-break in descriptions). Columns:
+Log EVERY experiment to `results.tsv` (tab-separated, NOT comma — commas
+break in descriptions) — kept, discarded, AND crashed. This is the
+permanent audit trail: it's how a human (or another agent, later) can see
+every idea tried, not just the ones that stuck, so failed directions
+aren't quietly re-tried. Columns:
 
 ```
 commit	aggregate_score	mean_score	status	description
 ```
 
-1. git commit hash (short, 7 chars)
+1. git commit hash (short, 7 chars) of the CODE commit this row is about —
+   for `keep`, this is reachable on the branch and can be checked out
+   directly; for `discard`/`crash`, `git reset --hard` makes it unreachable
+   from the branch afterward, but it's still recoverable via `git reflog`
+   for a while (not forever — don't rely on it past the session)
 2. `aggregate_score` from the eval JSON (e.g. `1.223000`) — use `0.000000`
    for crashes
 3. `mean_score` from the eval JSON, same format
 4. status: `keep`, `discard`, or `crash`
-5. short text description of what this experiment tried
+5. short text description of what this experiment tried, AND the
+   before/after `aggregate_score` (e.g. `"lower braking_factor 3.5->2.0:
+   0.276 -> 0.301"`) so the row is self-explanatory without cross-referencing
 
 ## The experiment loop
+
+Each experiment produces exactly two commits: one for the code change
+(`ai_drive_task.gd`), one for the log (`results.tsv`) — kept separate so
+`ai_drive_task.gd`'s own git history only ever shows genuine improvements
+(clean `git log res://ai/ai_drive_task.gd` = clean improvement history),
+while `results.tsv`'s history has a permanent row for every attempt.
 
 LOOP:
 
 1. Look at git state (current branch/commit).
 2. Tune `res://ai/ai_drive_task.gd` with one experimental idea.
 3. `tools/check_allowlist.sh` — must pass before committing.
-4. `git commit`
+4. `git commit -m "try: <one-line hypothesis>"` (code-only commit; message
+   gets amended below if kept, so it's fine if this first pass is terse).
 5. Run the eval command above, capturing stdout: `... > run.log 2>&1`
    (redirect everything, don't let output flood context).
 6. Parse the LAST line of `run.log` as JSON. Read `ok`, `aggregate_score`,
    `mean_score`, and each vehicle's `fair` flag.
 7. If `ok` is false, treat as a crash — this covers actual crashes/timeouts
    AND fairness violations (`fair: false` on any vehicle), which are
-   reported the same way on purpose: neither is an acceptable result. Log
-   status `crash`, `git reset --hard` back to the pre-experiment commit,
-   and move on (fix-and-retry only if the cause is a trivial, obvious bug —
-   a fairness violation almost never is; it means the idea itself was
-   "go faster by cheating," which isn't a real idea, drop it).
-8. If `aggregate_score` improved, keep it (advance the branch, commit stays).
-9. If `aggregate_score` is equal or worse, `git reset --hard` back to the
-   commit before this experiment (discard).
-10. Record the outcome in `results.tsv`. Repeat.
+   reported the same way on purpose: neither is an acceptable result.
+   `git reset --hard HEAD~1` to discard the code commit (fix-and-retry
+   first only if the cause is a trivial, obvious bug — a fairness violation
+   almost never is; it means the idea itself was "go faster by cheating",
+   which isn't a real idea, drop it). Then append a `crash` row to
+   `results.tsv` and commit just that: `git add results.tsv && git commit
+   -m "log: crash - <hypothesis>"`.
+8. Else if `aggregate_score` improved: `git commit --amend -m "<hypothesis>
+   — aggregate_score X.XXXXXX (was Y.YYYYYY)"` to bake the real result into
+   the code commit's message. Append a `keep` row to `results.tsv` and
+   commit it: `git add results.tsv && git commit -m "log: keep -
+   aggregate_score X.XXXXXX (was Y.YYYYYY)"`.
+9. Else (`aggregate_score` equal or worse): note the code commit's short
+   hash for the tsv row, then `git reset --hard HEAD~1` to discard it.
+   Append a `discard` row to `results.tsv` and commit it: `git add
+   results.tsv && git commit -m "log: discard - aggregate_score X.XXXXXX
+   (was Y.YYYYYY)"`.
+10. Repeat.
+
+**To replay/audit later**: `git log --oneline` on this branch shows the
+full sequence (interleaved code + log commits for every improvement, log
+commits for every discard/crash); `cat results.tsv` shows the complete
+table at any point in history (`git show <commit>:results.tsv`); and since
+the eval is deterministic, any surviving code commit can be checked out
+and re-run to reproduce its exact score.
 
 **Timeout**: budget ~5-6 minutes wall-clock per experiment (3 vehicles ×
 ~68s racing+countdown, plus engine startup). If a run meaningfully exceeds
