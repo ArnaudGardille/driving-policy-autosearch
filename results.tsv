@@ -1,2 +1,3 @@
 commit	aggregate_score	mean_score	status	description
 f7a1c69	0.275558	0.886028	keep	baseline
+1b51a77	0.275558	0.915522	discard	lower braking_factor 3.5->2.0: no change (tow_truck bottleneck is not curvature-braking-gated -- car_base/trailer_truck got faster but aggregate (=tow_truck) unchanged)
