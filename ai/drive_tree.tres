@@ -1,0 +1,10 @@
+[gd_resource type="BehaviorTree" format=3 uid="uid://cww38kpnjrvp6"]
+
+[ext_resource type="Script" uid="uid://d1ke4132k2sps" path="res://ai/ai_drive_task.gd" id="1_drive"]
+
+[sub_resource type="BTAction" id="BTAction_drive"]
+script = ExtResource("1_drive")
+
+[resource]
+description = "LimboAI driver: follows the racetrack Path3D using the AIDriveTask. Reads 'car' and 'path' from the blackboard."
+root_task = SubResource("BTAction_drive")
