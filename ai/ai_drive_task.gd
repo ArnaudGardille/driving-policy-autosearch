@@ -15,11 +15,11 @@ extends BTAction
 ## Maximum steering angle in radians.
 @export var max_steer: float = 0.4
 ## Minimum speed to maintain (won't slow below this).
-@export var min_speed: float = 2.5
+@export var min_speed: float = 3.0
 ## Maximum target speed.
 @export var max_speed: float = 25.0
 ## How sharply speed drops when approaching a turn (higher = brakes harder).
-@export var braking_factor: float = 6.0
+@export var braking_factor: float = 4.5
 ## How strongly to correct sideways drift back toward the track centerline
 ## (0 = pure pursuit only, which tends to hug one edge; 1 = fully snap back).
 ## 0.75 was found (by benchmark) to be the point where further increases
@@ -39,7 +39,7 @@ extends BTAction
 @export var track_search_step: float = 0.5
 ## Distance ahead to scan for the tightest UPCOMING curvature, so braking
 ## starts before the corner instead of only reacting once already in it.
-@export var curvature_preview: float = 25.0
+@export var curvature_preview: float = 18.0
 @export var curvature_preview_samples: int = 6
 ## Shrinks the steering look-ahead point in tight turns so the car tracks
 ## the true arc instead of cutting the corner wide. NOTE: measured to be
@@ -50,7 +50,7 @@ extends BTAction
 ## Extra emergency braking once the car strays this many meters off the
 ## centerline, regardless of curvature, as a last-resort safety margin
 ## before a wheel can reach the physical edge of the road.
-@export var safety_margin: float = 0.8
+@export var safety_margin: float = 0.9
 ## Distance ahead to check for a crest (elevation rises then falls). A crest
 ## can launch the car briefly airborne even when the slope itself isn't
 ## steep, and while airborne steering has no effect -- so it needs its own,
