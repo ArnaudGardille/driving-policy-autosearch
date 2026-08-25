@@ -156,7 +156,9 @@ LOOP:
    into `runs/<hash>.json`, where `<hash>` is the short hash of the code
    commit from step 4 (e.g. `mkdir -p runs && tail -n1 run.log >
    runs/<hash>.json`) — this is the run's permanent record, committed in
-   step 7/8/9 below alongside the tsv row, regardless of keep/discard/crash.
+   step 7/8/9 below alongside the tsv row. Treat this filename as
+   PROVISIONAL: it's final for discard/crash (step 7/9, no amend happens),
+   but step 8 (keep) renames it — see the note there.
 7. If `ok` is false, treat as a crash — this covers actual crashes/timeouts
    AND fairness violations (`fair: false` on any vehicle), which are
    reported the same way on purpose: neither is an acceptable result.
@@ -170,12 +172,18 @@ LOOP:
    `runs/<hash>.json` file for that row; note that in the description.)
 8. Else if `aggregate_score` improved: `git commit --amend -m "<hypothesis>
    — aggregate_score X.XXXXXX (was Y.YYYYYY)"` to bake the real result into
-   the code commit's message. Append a `keep` row to `results.tsv` and
-   commit both: `git add results.tsv runs/<hash>.json && git commit -m
-   "log: keep - aggregate_score X.XXXXXX (was Y.YYYYYY)"`. Note: `--amend`
-   changes the code commit's hash — use the ORIGINAL hash (from step 4,
-   before the amend) for the `runs/` filename and tsv row, decided before
-   you amend.
+   the code commit's message. `--amend` changes the code commit's hash —
+   get the NEW hash now (`git rev-parse --short HEAD`) and rename the
+   step-6 file to match (`git mv runs/<old-hash>.json runs/<new-hash>.json`
+   — or just re-derive it fresh from `run.log`, same content either way).
+   Use this NEW hash for both the `runs/` filename and the tsv row: it's
+   the one that stays reachable on the branch and checkable-out going
+   forward, unlike the pre-amend hash from step 4, which no longer is.
+   (This is the one case where the two differ — discard/crash above never
+   amend, so the step-4 hash there is already final.) Append a `keep` row
+   to `results.tsv` and commit both: `git add results.tsv
+   runs/<new-hash>.json && git commit -m "log: keep - aggregate_score
+   X.XXXXXX (was Y.YYYYYY)"`.
 9. Else (`aggregate_score` equal or worse): note the code commit's short
    hash for the tsv row, then `git reset --hard HEAD~1` to discard it.
    Append a `discard` row to `results.tsv` and commit both: `git add
@@ -222,7 +230,7 @@ out WHY, without giving the policy anything that could affect scoring
   each debug event, the fall, and the finish:
 
       /home/maitre/Documents/Godot_v4.7.2-stable_linux.x86_64 \
-          --display-driver x11 --rendering-driver vulkan --window-size 640x360 \
+          --display-driver x11 --rendering-driver vulkan --resolution 640x360 \
           --path . --script res://tests/capture_run.gd -- \
           --vehicle=tow_truck --seconds=65 \
           --dir=runs/<hash>/tow_truck_capture
@@ -232,7 +240,11 @@ out WHY, without giving the policy anything that could affect scoring
   back empty). This briefly opens a real window and is slower than the
   normal eval, so treat it as an on-demand diagnostic, not something to run
   every iteration: reach for it after a few discards in a row on the same
-  vehicle without a clear read on why, not by default. You (the agent) can
+  vehicle without a clear read on why, not by default. If a Godot EDITOR
+  instance is open on this project at the same time, expect this to be
+  noticeably slower or to stall outright (observed directly: two Vulkan
+  clients contending for the same GPU) — close the editor first if a run
+  seems stuck, and give it a generous timeout (2-3 min) regardless. You (the agent) can
   view the resulting PNGs directly. `runs/**/*.png` is gitignored by
   default (a merely exploratory look is diagnostic scratch, not part of
   the permanent record, and an untracked PNG would otherwise trip

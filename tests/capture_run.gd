@@ -12,18 +12,25 @@ extends SceneTree
 ## silently come back empty). Needs a display server (X11/Wayland) and a
 ## working rendering driver:
 ##
-##   godot --display-driver x11 --rendering-driver vulkan --path <repo> \
-##       --script res://tests/capture_run.gd -- \
+##   godot --display-driver x11 --rendering-driver vulkan --resolution 640x360 \
+##       --path <repo> --script res://tests/capture_run.gd -- \
 ##       --vehicle=tow_truck --dir=runs/<hash>/tow_truck_capture \
 ##       [--seconds=65] [--overrides={"cross_track_gain":0.75}]
-##       [--interval=15] [--max-shots=12] [--window-size=640x360]
+##       [--interval=15] [--max-shots=12]
 ##
 ## A window will briefly appear on screen for the duration of the run (this
 ## machine has an active desktop session; there is no true headless-with-
-## rendering mode available here -- see PROGRAM.md for why). --window-size
+## rendering mode available here -- see PROGRAM.md for why). --resolution
+## is a native Godot engine flag (must go BEFORE the `--` separator, not
+## after -- everything after `--` is a script arg, not an engine one) and
 ## also controls the screenshot resolution; keep it modest to keep PNGs
 ## small if you're going to commit them.
 ##
+## If a Godot EDITOR instance is open on this same project at the same
+## time, expect this to be noticeably slower, or to stall outright --
+## observed directly while building this tool: two Vulkan clients (the
+## editor + this run) contending for the same GPU. Close the editor first
+## if a run seems stuck; give it a generous timeout (2-3 min) regardless.
 ## Prints the same per-vehicle result Dictionary run_eval.gd would produce
 ## for this vehicle (score, fair, trace, events, etc.) as the LAST line of
 ## stdout, PLUS a "screenshots" list of saved PNG paths, and also writes
@@ -88,7 +95,12 @@ func _init() -> void:
 	var result: Dictionary = await AIBenchmark.run(
 			self, racing_seconds, overrides, VEHICLE_SCENES[vehicle_key], capture)
 
-	if result.get("screenshots", []).is_empty():
+	# capture is this tool's entire reason to exist -- zero screenshots is a
+	# failure of the actual task even if the race itself was "fair", so it
+	# must show up in the exit code, not just a stderr warning a caller
+	# checking exit status alone would miss.
+	var capture_failed: bool = result.get("screenshots", []).is_empty()
+	if capture_failed:
 		push_warning("No screenshots were saved. Did you forget to drop --headless " +
 				"and pass --display-driver x11 --rendering-driver vulkan (or similar)?")
 
@@ -101,7 +113,7 @@ func _init() -> void:
 		f.close()
 
 	print(JSON.stringify(result))
-	quit(0 if result.get("fair", false) else 1)
+	quit(0 if (result.get("fair", false) and not capture_failed) else 1)
 
 
 func _parse_args() -> Dictionary:

@@ -84,7 +84,12 @@ static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = 
 
 	# Agent-writable event channel: ai_drive_task.gd may push short labels
 	# onto the blackboard var "debug_events" (see class doc above). Drained
-	# here every tick and timestamped; purely observational.
+	# here every tick and timestamped; purely observational. Capped like
+	# screenshots below -- unlike the (gitignored-by-default) screenshots,
+	# "events" gets permanently committed into runs/<hash>.json every
+	# experiment, so an unbounded push stream (e.g. one push per tick)
+	# would bloat the repo's history forever, not just clutter one run.
+	const _MAX_EVENTS := 100
 	var events: Array = []
 	var _events_seen := 0
 
@@ -173,12 +178,12 @@ static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = 
 			var bb = race_scene._ai_driver.get_blackboard()
 			if bb and bb.has_var("debug_events"):
 				var pushed: Array = bb.get_var("debug_events")
-				while _events_seen < pushed.size():
+				while _events_seen < pushed.size() and events.size() < _MAX_EVENTS:
 					var label: String = str(pushed[_events_seen])
 					events.append({"tick": i, "t": race_time_now, "label": label})
 					if _capture_enabled and screenshots.size() < _capture_max_shots:
 						screenshots.append(_capture_shot(tree, _capture_dir,
-								"%03d_event_%s" % [screenshots.size(), label.replace(" ", "_")]))
+								"%03d_event_%s" % [screenshots.size(), _sanitize_tag(label)]))
 					_events_seen += 1
 
 		if _capture_enabled and screenshots.size() < _capture_max_shots and race_time_now >= _next_capture_s:
@@ -251,6 +256,20 @@ static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = 
 ## under --headless, where the rendering driver is "dummy" and never
 ## produces real pixels -- silently skipped rather than crashing the eval,
 ## since capture is an optional diagnostic extra, not part of scoring).
+## Strips a debug_events label down to safe filename characters (alnum,
+## underscore, hyphen). Labels come from ai/ scripts, which are allowed to
+## push arbitrary strings -- without this, a label containing "/" or ".."
+## could write a screenshot outside the intended capture directory. (Not
+## String.is_valid_identifier() per-character -- that rejects digits when
+## checked alone, since identifiers can't START with one; a plain
+## character-class check is what's actually needed here.)
+static func _sanitize_tag(s: String) -> String:
+	var re := RegEx.new()
+	re.compile("[^A-Za-z0-9_-]")
+	var out: String = re.sub(s, "_", true)
+	return out.substr(0, 40) if out.length() > 40 else out
+
+
 static func _capture_shot(tree: SceneTree, dir: String, tag: String) -> String:
 	var viewport_texture: ViewportTexture = tree.root.get_texture()
 	if viewport_texture == null:
