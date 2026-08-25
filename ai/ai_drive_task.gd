@@ -39,7 +39,7 @@ extends BTAction
 @export var track_search_step: float = 0.5
 ## Distance ahead to scan for the tightest UPCOMING curvature, so braking
 ## starts before the corner instead of only reacting once already in it.
-@export var curvature_preview: float = 18.0
+@export var curvature_preview: float = 14.0
 @export var curvature_preview_samples: int = 6
 ## Shrinks the steering look-ahead point in tight turns so the car tracks
 ## the true arc instead of cutting the corner wide. NOTE: measured to be
