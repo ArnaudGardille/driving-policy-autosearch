@@ -107,7 +107,9 @@ commit	aggregate_score	mean_score	status	description
    for `keep`, this is reachable on the branch and can be checked out
    directly; for `discard`/`crash`, `git reset --hard` makes it unreachable
    from the branch afterward, but it's still recoverable via `git reflog`
-   for a while (not forever — don't rely on it past the session)
+   for a while (not forever — don't rely on it past the session). The code
+   diff itself is only ever preserved this way, but the run's full raw
+   output is not — see `runs/<hash>.json` below, which IS permanent.
 2. `aggregate_score` from the eval JSON (e.g. `1.223000`) — use `0.000000`
    for crashes
 3. `mean_score` from the eval JSON, same format
@@ -115,6 +117,22 @@ commit	aggregate_score	mean_score	status	description
 5. short text description of what this experiment tried, AND the
    before/after `aggregate_score` (e.g. `"lower braking_factor 3.5->2.0:
    0.276 -> 0.301"`) so the row is self-explanatory without cross-referencing
+
+Alongside `results.tsv`, also save the full raw eval JSON for every
+experiment to `runs/<hash>.json` (`<hash>` = the same short commit hash as
+the tsv row), and commit it in the SAME commit as the tsv row. This is the
+one piece of upstream `autoresearch`'s design that didn't translate well
+as-is: there, `results.tsv` itself is the whole record (a `val_bpb` float
+is the complete story). Here, the eval JSON carries per-vehicle telemetry
+(`avg_lateral_offset_m`, `max_speed_mps`, `fell_off_track`,
+`fall_distance_m`, the `fair` flags, etc.) that a one-line tsv description
+can't fully capture, and `run.log` — the only place that JSON otherwise
+appears — is gitignored and overwritten by the very next run. Without this,
+a `discard`/`crash` experiment's full telemetry is unrecoverable the moment
+you move on (worse than the code diff: that at least survives in reflog for
+a while). Because the tsv/JSON pair is committed as part of the LOG commit
+(never `git reset --hard`, unlike the code commit), it survives permanently
+regardless of whether the code was kept, discarded, or crashed.
 
 ## The experiment loop
 
@@ -134,7 +152,11 @@ LOOP:
 5. Run the eval command above, capturing stdout: `... > run.log 2>&1`
    (redirect everything, don't let output flood context).
 6. Parse the LAST line of `run.log` as JSON. Read `ok`, `aggregate_score`,
-   `mean_score`, and each vehicle's `fair` flag.
+   `mean_score`, and each vehicle's `fair` flag. Copy that same JSON line
+   into `runs/<hash>.json`, where `<hash>` is the short hash of the code
+   commit from step 4 (e.g. `mkdir -p runs && tail -n1 run.log >
+   runs/<hash>.json`) — this is the run's permanent record, committed in
+   step 7/8/9 below alongside the tsv row, regardless of keep/discard/crash.
 7. If `ok` is false, treat as a crash — this covers actual crashes/timeouts
    AND fairness violations (`fair: false` on any vehicle), which are
    reported the same way on purpose: neither is an acceptable result.
@@ -142,26 +164,33 @@ LOOP:
    first only if the cause is a trivial, obvious bug — a fairness violation
    almost never is; it means the idea itself was "go faster by cheating",
    which isn't a real idea, drop it). Then append a `crash` row to
-   `results.tsv` and commit just that: `git add results.tsv && git commit
-   -m "log: crash - <hypothesis>"`.
+   `results.tsv` and commit both: `git add results.tsv runs/<hash>.json &&
+   git commit -m "log: crash - <hypothesis>"`. (If step 5 crashed before
+   producing any JSON at all — no parseable last line — skip the
+   `runs/<hash>.json` file for that row; note that in the description.)
 8. Else if `aggregate_score` improved: `git commit --amend -m "<hypothesis>
    — aggregate_score X.XXXXXX (was Y.YYYYYY)"` to bake the real result into
    the code commit's message. Append a `keep` row to `results.tsv` and
-   commit it: `git add results.tsv && git commit -m "log: keep -
-   aggregate_score X.XXXXXX (was Y.YYYYYY)"`.
+   commit both: `git add results.tsv runs/<hash>.json && git commit -m
+   "log: keep - aggregate_score X.XXXXXX (was Y.YYYYYY)"`. Note: `--amend`
+   changes the code commit's hash — use the ORIGINAL hash (from step 4,
+   before the amend) for the `runs/` filename and tsv row, decided before
+   you amend.
 9. Else (`aggregate_score` equal or worse): note the code commit's short
    hash for the tsv row, then `git reset --hard HEAD~1` to discard it.
-   Append a `discard` row to `results.tsv` and commit it: `git add
-   results.tsv && git commit -m "log: discard - aggregate_score X.XXXXXX
-   (was Y.YYYYYY)"`.
+   Append a `discard` row to `results.tsv` and commit both: `git add
+   results.tsv runs/<hash>.json && git commit -m "log: discard -
+   aggregate_score X.XXXXXX (was Y.YYYYYY)"`.
 10. Repeat.
 
 **To replay/audit later**: `git log --oneline` on this branch shows the
 full sequence (interleaved code + log commits for every improvement, log
 commits for every discard/crash); `cat results.tsv` shows the complete
-table at any point in history (`git show <commit>:results.tsv`); and since
-the eval is deterministic, any surviving code commit can be checked out
-and re-run to reproduce its exact score.
+table at any point in history (`git show <commit>:results.tsv`); `cat
+runs/<hash>.json` gives the full per-vehicle telemetry for any single
+experiment, kept or not; and since the eval is deterministic, any
+surviving code commit (i.e. any `keep`) can also be checked out and
+re-run to reproduce its exact score from scratch.
 
 **Timeout**: budget ~5-6 minutes wall-clock per experiment (3 vehicles ×
 ~68s racing+countdown, plus engine startup). If a run meaningfully exceeds
