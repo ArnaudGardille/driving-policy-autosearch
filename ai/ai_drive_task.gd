@@ -15,11 +15,11 @@ extends BTAction
 ## Maximum steering angle in radians.
 @export var max_steer: float = 0.4
 ## Minimum speed to maintain (won't slow below this).
-@export var min_speed: float = 4.5
+@export var min_speed: float = 5.0
 ## Maximum target speed.
 @export var max_speed: float = 25.0
 ## How sharply speed drops when approaching a turn (higher = brakes harder).
-@export var braking_factor: float = 2.5
+@export var braking_factor: float = 2.0
 ## How strongly to correct sideways drift back toward the track centerline
 ## (0 = pure pursuit only, which tends to hug one edge; 1 = fully snap back).
 ## 0.75 was found (by benchmark) to be the point where further increases
