@@ -90,6 +90,41 @@ is non-zero on any failure — bad args, unknown vehicle, script error, *or a
 fairness violation* — treat that as "do not accept this candidate",
 independent of whatever score value is or isn't present in the output.
 
+## Analysing a run
+
+The aggregate JSON (`score`, `fair`, `distance_m`, etc.) tells you *that*
+something went wrong; these three additions help with *why*, without giving
+the policy anything it could use to cheat (all purely observational, none
+of it feeds back into scoring):
+
+- **`trace`** — every eval run includes a tick-sampled array (position,
+  speed, lateral offset, steering, engine force, every ~0.5s) in its
+  per-vehicle result and therefore in `runs/<hash>.json` (see "Logging
+  results" in `PROGRAM.md`). Always on, free (no GPU needed) — read it back
+  to see the shape of a trajectory or spot oscillation after the fact,
+  without re-running anything.
+- **`debug_events`** — `ai_drive_task.gd` (or any `ai/` script) may push
+  short string labels onto the blackboard var `"debug_events"` at moments
+  worth marking (e.g. when a stuck-recovery maneuver triggers):
+
+      var bb := get_blackboard()
+      var events: Array = bb.get_var("debug_events") if bb.has_var("debug_events") else []
+      events.append("recovery start")
+      bb.set_var("debug_events", events)
+
+  Each push is timestamped and returned in the eval JSON's `events` list.
+  This is additive to "what you CAN do" — it's observation, not actuation,
+  so it doesn't touch the control surface and can't affect fairness.
+- **Screenshots** (`res://tests/capture_run.gd`) — an on-demand tool,
+  separate from the main eval, that runs ONE vehicle with real rendering
+  and saves PNGs of what the player would see at the run's start, periodic
+  checkpoints, each `debug_events` entry, the fall moment, and the finish
+  moment. Reach for this when telemetry alone doesn't explain a failure —
+  not as a replacement for the normal fast loop, and not every iteration
+  (it needs a real window/GPU, so it's slower and can't run under
+  `--headless`). See the header comment in `capture_run.gd` for the
+  invocation, or `PROGRAM.md`'s "Analysis tools" section.
+
 ## Recommended loop (per candidate)
 
 1. Propose a change, implemented ONLY under `res://ai/`.

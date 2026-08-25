@@ -13,8 +13,29 @@ class_name AIBenchmark
 ## better than it is, so callers doing real comparisons should run this for
 ## every vehicle the human can actually pick and aggregate conservatively
 ## (e.g. minimum, not mean) across the results.
+##
+## `capture` (optional, off by default -- the normal fast/headless eval path
+## is entirely unaffected) enables screenshot capture at key moments: run
+## start, periodic checkpoints, agent-pushed debug events (see below), the
+## fall moment, and the finish moment. Requires REAL rendering -- this does
+## NOT work under `--headless` (its "dummy" rendering driver never produces
+## actual pixels; `get_texture()` returns null). Call with
+## `--display-driver x11 --rendering-driver vulkan` (or another real
+## rendering driver) instead. Keys: `enabled: bool`, `dir: String` (output
+## directory, created if missing), `interval_s: float` (periodic cadence,
+## default 15.0), `max_shots: int` (safety cap on total screenshots, default
+## 12 -- guards against a chatty debug_events stream filling the disk).
+##
+## `ai/` scripts (e.g. ai_drive_task.gd) may optionally push short string
+## labels onto the blackboard var "debug_events" (append to the Array,
+## creating it via set_var if absent) to mark moments worth a closer look --
+## e.g. when a stuck-recovery maneuver triggers. This is purely observational
+## and has zero effect on scoring: every event is timestamped and recorded
+## in the output's "events" list, and (if capture is enabled) triggers a
+## screenshot, but nothing here reads it back into the driving logic itself.
 static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = {},
-		vehicle_scene_path: String = "res://vehicles/car_base.tscn") -> Dictionary:
+		vehicle_scene_path: String = "res://vehicles/car_base.tscn",
+		capture: Dictionary = {}) -> Dictionary:
 	var race_scene: Node3D = preload("res://race/race_scene.tscn").instantiate()
 	tree.root.add_child(race_scene)
 	race_scene.ai_enabled = true
@@ -50,6 +71,34 @@ static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = 
 	var min_car_y := INF
 	var fell_off := false
 	var fall_distance_m := -1.0
+
+	# Tick-sampled trace: a lightweight "flight recorder" independent of
+	# screenshot capture, cheap enough to always collect (no GPU needed,
+	# works fine under --headless). Sampled at a fixed cadence rather than
+	# every physics tick to keep the output small (~130 samples per vehicle
+	# at the default 65s race) while still being enough to see the shape of
+	# a trajectory or spot oscillation after the fact.
+	const _TRACE_INTERVAL_S := 0.5
+	var trace: Array = []
+	var _next_trace_s := 0.0
+
+	# Agent-writable event channel: ai_drive_task.gd may push short labels
+	# onto the blackboard var "debug_events" (see class doc above). Drained
+	# here every tick and timestamped; purely observational.
+	var events: Array = []
+	var _events_seen := 0
+
+	# Screenshot capture (see class doc above for the capture dict's keys).
+	var _capture_enabled: bool = capture.get("enabled", false)
+	var _capture_dir: String = capture.get("dir", "")
+	var _capture_interval_s: float = capture.get("interval_s", 15.0)
+	var _capture_max_shots: int = capture.get("max_shots", 12)
+	var _next_capture_s := 0.0
+	var _captured_fall := false
+	var _captured_finish := false
+	var screenshots: Array = []
+	if _capture_enabled and _capture_dir != "":
+		DirAccess.make_dir_recursive_absolute(_capture_dir)
 
 	# Fairness enforcement: the allowlist (tools/check_allowlist.sh) stops a
 	# candidate from editing vehicle.gd/race_manager.gd, but nothing stops
@@ -106,6 +155,46 @@ static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = 
 		sum_speed += speed
 		max_speed = maxf(max_speed, speed)
 
+		var race_time_now: float = sample_count / float(Engine.physics_ticks_per_second)
+
+		if race_time_now >= _next_trace_s:
+			trace.append({
+				"t": race_time_now,
+				"x": car_global.x,
+				"z": car_global.z,
+				"speed": speed,
+				"lateral": lateral,
+				"steering": vehicle.steering,
+				"engine_force": vehicle.engine_force,
+			})
+			_next_trace_s += _TRACE_INTERVAL_S
+
+		if is_instance_valid(race_scene._ai_driver):
+			var bb = race_scene._ai_driver.get_blackboard()
+			if bb and bb.has_var("debug_events"):
+				var pushed: Array = bb.get_var("debug_events")
+				while _events_seen < pushed.size():
+					var label: String = str(pushed[_events_seen])
+					events.append({"tick": i, "t": race_time_now, "label": label})
+					if _capture_enabled and screenshots.size() < _capture_max_shots:
+						screenshots.append(_capture_shot(tree, _capture_dir,
+								"%03d_event_%s" % [screenshots.size(), label.replace(" ", "_")]))
+					_events_seen += 1
+
+		if _capture_enabled and screenshots.size() < _capture_max_shots and race_time_now >= _next_capture_s:
+			screenshots.append(_capture_shot(tree, _capture_dir, "%03d_t%.0fs" % [screenshots.size(), race_time_now]))
+			_next_capture_s += _capture_interval_s
+
+		if fell_off and not _captured_fall:
+			_captured_fall = true
+			if _capture_enabled and screenshots.size() < _capture_max_shots:
+				screenshots.append(_capture_shot(tree, _capture_dir, "%03d_fell_off" % screenshots.size()))
+
+		if not _captured_finish and race_scene._total_distance >= race_scene._track_length - race_scene.FINISH_LINE_MARGIN:
+			_captured_finish = true
+			if _capture_enabled and screenshots.size() < _capture_max_shots:
+				screenshots.append(_capture_shot(tree, _capture_dir, "%03d_finish" % screenshots.size()))
+
 	var fair_steering: bool = max_abs_steering <= steer_limit + _FAIRNESS_TOLERANCE
 	var fair_engine_force: bool = max_abs_engine_force <= _ENGINE_FORCE_CEILING + _FAIRNESS_TOLERANCE
 	var fair: bool = fair_steering and fair_engine_force
@@ -147,7 +236,28 @@ static func run(tree: SceneTree, racing_seconds: float, overrides: Dictionary = 
 		"steer_limit": steer_limit,
 		"max_engine_force_used": max_abs_engine_force,
 		"engine_force_ceiling": _ENGINE_FORCE_CEILING,
+		"trace": trace,
+		"events": events,
+		"screenshots": screenshots,
 	}
 
 	race_scene.queue_free()
 	return result
+
+
+## Captures the current frame (whatever the active camera sees -- i.e. the
+## same view the player would have) and saves it as a PNG. Returns the saved
+## path, or "" if capture isn't actually possible right now (e.g. running
+## under --headless, where the rendering driver is "dummy" and never
+## produces real pixels -- silently skipped rather than crashing the eval,
+## since capture is an optional diagnostic extra, not part of scoring).
+static func _capture_shot(tree: SceneTree, dir: String, tag: String) -> String:
+	var viewport_texture: ViewportTexture = tree.root.get_texture()
+	if viewport_texture == null:
+		return ""
+	var img: Image = viewport_texture.get_image()
+	if img == null:
+		return ""
+	var path: String = dir.path_join(tag + ".png")
+	img.save_png(path)
+	return path

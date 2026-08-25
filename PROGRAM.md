@@ -199,10 +199,51 @@ default command timeout (e.g. a coding agent's shell tool defaulting to
 ~120s), raise it explicitly (~400s) for the eval command — the default is
 not enough and will truncate `run.log` mid-run.
 
+## Analysis tools
+
+The aggregate score tells you THAT a candidate is worse; these help figure
+out WHY, without giving the policy anything that could affect scoring
+(all purely observational):
+
+- **`trace`**: every eval run already includes a tick-sampled array
+  (position, speed, lateral offset, steering, engine force, ~every 0.5s)
+  in each vehicle's result, and therefore in `runs/<hash>.json` for free —
+  no extra step needed. Good first stop before reaching for anything else:
+  `cat runs/<hash>.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['per_vehicle']['tow_truck']['trace'])"`
+  (or similar) shows the shape of a trajectory without re-running anything.
+- **`debug_events`**: `ai_drive_task.gd` may push short labels onto the
+  blackboard var `"debug_events"` at moments worth marking (e.g. "recovery
+  start") — see `README_RESEARCH.md`'s "Analysing a run" section for the
+  exact snippet. Each push shows up timestamped in the eval JSON's
+  `events` list. Cheap, safe to leave in permanently once added.
+- **Screenshots**: when trace + events still don't explain a failure,
+  `res://tests/capture_run.gd` runs ONE vehicle with real rendering and
+  saves PNGs of what the player sees at the start, periodic checkpoints,
+  each debug event, the fall, and the finish:
+
+      /home/maitre/Documents/Godot_v4.7.2-stable_linux.x86_64 \
+          --display-driver x11 --rendering-driver vulkan --window-size 640x360 \
+          --path . --script res://tests/capture_run.gd -- \
+          --vehicle=tow_truck --seconds=65 \
+          --dir=runs/<hash>/tow_truck_capture
+
+  Note this does NOT use `--headless` (its "dummy" rendering driver never
+  produces real pixels — confirmed by testing; every screenshot would come
+  back empty). This briefly opens a real window and is slower than the
+  normal eval, so treat it as an on-demand diagnostic, not something to run
+  every iteration: reach for it after a few discards in a row on the same
+  vehicle without a clear read on why, not by default. You (the agent) can
+  view the resulting PNGs directly. `runs/**/*.png` is gitignored by
+  default (a merely exploratory look is diagnostic scratch, not part of
+  the permanent record, and an untracked PNG would otherwise trip
+  `check_allowlist.sh` on your next commit). If a set of screenshots was
+  genuinely instructive enough to keep, force-add it explicitly (`git add
+  -f runs/<hash>/<vehicle>_capture/`) and commit it alongside that
+  experiment's log commit, same as `runs/<hash>.json`.
+
 **NEVER STOP** (once past setup): don't pause to ask "should I keep going?".
 Iterate until the human interrupts you. If out of ideas: re-read
 `ai_drive_task.gd`'s own comments for previously-tried-and-reverted ideas
 (don't blindly repeat them without a new angle), try combining two small
-wins, try a different corner of the track (inspect telemetry from
-`res://tests/ai_benchmark.gd`'s richer per-tick metrics if you need more
-signal than the aggregate).
+wins, try a different corner of the track, or use the analysis tools above
+if you need more signal than the aggregate.
