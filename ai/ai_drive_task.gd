@@ -51,6 +51,13 @@ extends BTAction
 ## centerline, regardless of curvature, as a last-resort safety margin
 ## before a wheel can reach the physical edge of the road.
 @export var safety_margin: float = 0.9
+## Curvature above which a corner is treated as a hairpin: regardless of the
+## general (now-eased) curvature braking above, clamp down to
+## hairpin_min_speed. Lets the general braking envelope stay loose (good for
+## every other corner on the track) while still hard-capping speed at the
+## single sharpest corner, instead of one shared factor having to cover both.
+@export var hairpin_curvature_threshold: float = 0.65
+@export var hairpin_min_speed: float = 4.5
 ## Distance ahead to check for a crest (elevation rises then falls). A crest
 ## can launch the car briefly airborne even when the slope itself isn't
 ## steep, and while airborne steering has no effect -- so it needs its own,
@@ -170,6 +177,8 @@ func _drive(car: VehicleBody3D, path: Path3D, delta: float) -> void:
 	var target_speed: float = max_speed
 	if curvature > 0.3:
 		target_speed = lerpf(max_speed, min_speed, clampf((curvature - 0.3) * braking_factor, 0.0, 1.0))
+	if curvature > hairpin_curvature_threshold:
+		target_speed = minf(target_speed, hairpin_min_speed)
 
 	# Slow down for steep DESCENTS (ramps) so the car doesn't lose traction on
 	# landing. Climbs are deliberately NOT braked for: a climb needs momentum
