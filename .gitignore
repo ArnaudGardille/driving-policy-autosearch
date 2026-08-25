@@ -5,4 +5,4 @@
 
 # OS
 .DS_Store
-run.log
+*.log
