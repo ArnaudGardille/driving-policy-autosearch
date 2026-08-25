@@ -76,7 +76,8 @@ treat that as an automatic reject, regardless of the score value.
 
 Headless, deterministic, no editor required:
 
-    <godot-binary> --headless --path <repo> --script res://tests/run_eval.gd -- \
+    /home/maitre/Documents/Godot_v4.7.2-stable_linux.x86_64 --headless --path . \
+        --script res://tests/run_eval.gd -- \
         --seconds=65 --vehicles=car_base,trailer_truck,tow_truck
 
 Optional flags: `--overrides={"cross_track_gain":0.75}` (JSON object of

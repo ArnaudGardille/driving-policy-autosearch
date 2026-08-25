@@ -29,9 +29,13 @@ To set up a new experiment run, work with the user to:
 Each experiment is scored by a single headless command, run from the repo root:
 
 ```
-<godot-binary> --headless --path . --script res://tests/run_eval.gd -- \
+/home/maitre/Documents/Godot_v4.7.2-stable_linux.x86_64 --headless --path . \
+    --script res://tests/run_eval.gd -- \
     --seconds=65 --vehicles=car_base,trailer_truck,tow_truck
 ```
+
+(Run this from the repo root. If the Godot binary has moved, find it with
+`which godot` or check the project's usual launch shortcut first.)
 
 This runs a full deterministic race for each of the three vehicles (a human
 can drive any of them) and prints one line of JSON as the LAST line of
