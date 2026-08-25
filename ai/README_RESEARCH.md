@@ -40,9 +40,13 @@ drives well in its favorite one is not a better policy.
 
 ## What must never change
 
-Enforced mechanically by `tools/check_allowlist.sh` — run it before every
-eval and reject (do not score, do not accept) any candidate whose diff fails
-it:
+Enforced mechanically, in two layers — a candidate is rejected if it fails
+either one, independent of what score it would otherwise have gotten:
+
+**1. File-level allowlist** (`tools/check_allowlist.sh`, run before every
+eval): rejects any candidate whose change set — staged, unstaged, *and*
+untracked new files, not just `git diff` — touches anything outside
+`res://ai/`:
 
 - `res://vehicles/*.gd` — car physics: steering limit, engine force, mass,
   suspension. This *is* the "same car as the human" guarantee.
@@ -51,6 +55,22 @@ it:
 - `res://town/model/racetrack_csg.tscn` — the track geometry.
 - `res://tests/*.gd` — the judge that scores the candidate. It must not be
   able to grade its own homework.
+
+**2. Runtime fairness check** (built into `res://tests/ai_benchmark.gd`,
+reported as `fair`/`ok` in the eval JSON): the file allowlist stops a
+candidate from *editing* `vehicle.gd`, but nothing stops code living inside
+the *allowed* `ai_drive_task.gd` from just calling `car.engine_force` /
+`car.steering` with values a human could never reach (e.g. quietly bumping
+its own `engine_power` export past what the player's own car ever applies).
+Since `ai_drive_task.gd` fully owns those properties every tick while the AI
+drives, this can only be caught by checking the values actually *applied* to
+the car, every tick, against the car's own frozen constants — not by
+reading the policy script's intentions. Every eval run tracks the peak
+`engine_force` and `steering` actually used and compares them against the
+car's own `STEER_LIMIT` and the shared low-speed-boost ceiling of `100.0`
+(the highest `engine_force` a human can ever get from `vehicle.gd`, at any
+speed). A violation sets `fair: false` and `ok: false` in the output —
+treat that as an automatic reject, regardless of the score value.
 
 ## How to evaluate a candidate
 
@@ -65,9 +85,9 @@ script).
 
 Prints one line of JSON as the LAST line of stdout (Godot prints a version
 banner first) with a `score` per vehicle plus `aggregate_score`. Exit code
-is non-zero on any failure (bad args, unknown vehicle, script error) —
-treat that as "do not accept this candidate", independent of whatever score
-value is or isn't present in the output.
+is non-zero on any failure — bad args, unknown vehicle, script error, *or a
+fairness violation* — treat that as "do not accept this candidate",
+independent of whatever score value is or isn't present in the output.
 
 ## Recommended loop (per candidate)
 

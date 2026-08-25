@@ -51,7 +51,17 @@ stdout (Godot prints a version banner first).
   car as the human" guarantee), `res://race/race_manager.gd` (the referee),
   the racetrack scene, or `res://tests/*.gd` (the judge). These are frozen.
   **Before every commit, run `tools/check_allowlist.sh`** — if it rejects
-  your diff, you have gone out of bounds; fix it before committing.
+  your change set (this checks staged, unstaged, AND new untracked files),
+  you have gone out of bounds; fix it before committing.
+- Apply `car.engine_force` or `car.steering` values a human could never
+  reach. The allowlist only stops you editing `vehicle.gd`; it does NOT
+  stop `ai_drive_task.gd` itself from just calling those properties with
+  bigger numbers (e.g. quietly raising `engine_power`). This is caught
+  separately, at runtime, every eval: the JSON output's `fair`/`ok` fields
+  go false if the peak applied engine force or steering ever exceeded the
+  car's own limits (`STEER_LIMIT`, and the shared 100.0 low-speed-boost
+  ceiling). **Treat `ok: false` as an automatic reject, no matter the
+  score** — step 6/7 below.
 - Loosen the AI's sensing beyond what it already has (direct `Path3D` curve
   access) without flagging it explicitly as a sensing change, not a driving
   improvement — see the caveat in `README_RESEARCH.md`.
@@ -100,10 +110,14 @@ LOOP:
 5. Run the eval command above, capturing stdout: `... > run.log 2>&1`
    (redirect everything, don't let output flood context).
 6. Parse the LAST line of `run.log` as JSON. Read `ok`, `aggregate_score`,
-   `mean_score`.
-7. If `ok` is false or the run crashed/timed out, treat as a crash: log
+   `mean_score`, and each vehicle's `fair` flag.
+7. If `ok` is false, treat as a crash — this covers actual crashes/timeouts
+   AND fairness violations (`fair: false` on any vehicle), which are
+   reported the same way on purpose: neither is an acceptable result. Log
    status `crash`, `git reset --hard` back to the pre-experiment commit,
-   and move on (fix-and-retry only if the cause is a trivial, obvious bug).
+   and move on (fix-and-retry only if the cause is a trivial, obvious bug —
+   a fairness violation almost never is; it means the idea itself was
+   "go faster by cheating," which isn't a real idea, drop it).
 8. If `aggregate_score` improved, keep it (advance the branch, commit stays).
 9. If `aggregate_score` is equal or worse, `git reset --hard` back to the
    commit before this experiment (discard).
