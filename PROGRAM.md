@@ -107,7 +107,9 @@ commit	aggregate_score	mean_score	status	description
    for `keep`, this is reachable on the branch and can be checked out
    directly; for `discard`/`crash`, `git reset --hard` makes it unreachable
    from the branch afterward, but it's still recoverable via `git reflog`
-   for a while (not forever — don't rely on it past the session)
+   for a while (not forever — don't rely on it past the session). The code
+   diff itself is only ever preserved this way, but the run's full raw
+   output is not — see `runs/<hash>.json` below, which IS permanent.
 2. `aggregate_score` from the eval JSON (e.g. `1.223000`) — use `0.000000`
    for crashes
 3. `mean_score` from the eval JSON, same format
@@ -115,6 +117,22 @@ commit	aggregate_score	mean_score	status	description
 5. short text description of what this experiment tried, AND the
    before/after `aggregate_score` (e.g. `"lower braking_factor 3.5->2.0:
    0.276 -> 0.301"`) so the row is self-explanatory without cross-referencing
+
+Alongside `results.tsv`, also save the full raw eval JSON for every
+experiment to `runs/<hash>.json` (`<hash>` = the same short commit hash as
+the tsv row), and commit it in the SAME commit as the tsv row. This is the
+one piece of upstream `autoresearch`'s design that didn't translate well
+as-is: there, `results.tsv` itself is the whole record (a `val_bpb` float
+is the complete story). Here, the eval JSON carries per-vehicle telemetry
+(`avg_lateral_offset_m`, `max_speed_mps`, `fell_off_track`,
+`fall_distance_m`, the `fair` flags, etc.) that a one-line tsv description
+can't fully capture, and `run.log` — the only place that JSON otherwise
+appears — is gitignored and overwritten by the very next run. Without this,
+a `discard`/`crash` experiment's full telemetry is unrecoverable the moment
+you move on (worse than the code diff: that at least survives in reflog for
+a while). Because the tsv/JSON pair is committed as part of the LOG commit
+(never `git reset --hard`, unlike the code commit), it survives permanently
+regardless of whether the code was kept, discarded, or crashed.
 
 ## The experiment loop
 
@@ -134,7 +152,13 @@ LOOP:
 5. Run the eval command above, capturing stdout: `... > run.log 2>&1`
    (redirect everything, don't let output flood context).
 6. Parse the LAST line of `run.log` as JSON. Read `ok`, `aggregate_score`,
-   `mean_score`, and each vehicle's `fair` flag.
+   `mean_score`, and each vehicle's `fair` flag. Copy that same JSON line
+   into `runs/<hash>.json`, where `<hash>` is the short hash of the code
+   commit from step 4 (e.g. `mkdir -p runs && tail -n1 run.log >
+   runs/<hash>.json`) — this is the run's permanent record, committed in
+   step 7/8/9 below alongside the tsv row. Treat this filename as
+   PROVISIONAL: it's final for discard/crash (step 7/9, no amend happens),
+   but step 8 (keep) renames it — see the note there.
 7. If `ok` is false, treat as a crash — this covers actual crashes/timeouts
    AND fairness violations (`fair: false` on any vehicle), which are
    reported the same way on purpose: neither is an acceptable result.
@@ -142,26 +166,39 @@ LOOP:
    first only if the cause is a trivial, obvious bug — a fairness violation
    almost never is; it means the idea itself was "go faster by cheating",
    which isn't a real idea, drop it). Then append a `crash` row to
-   `results.tsv` and commit just that: `git add results.tsv && git commit
-   -m "log: crash - <hypothesis>"`.
+   `results.tsv` and commit both: `git add results.tsv runs/<hash>.json &&
+   git commit -m "log: crash - <hypothesis>"`. (If step 5 crashed before
+   producing any JSON at all — no parseable last line — skip the
+   `runs/<hash>.json` file for that row; note that in the description.)
 8. Else if `aggregate_score` improved: `git commit --amend -m "<hypothesis>
    — aggregate_score X.XXXXXX (was Y.YYYYYY)"` to bake the real result into
-   the code commit's message. Append a `keep` row to `results.tsv` and
-   commit it: `git add results.tsv && git commit -m "log: keep -
-   aggregate_score X.XXXXXX (was Y.YYYYYY)"`.
+   the code commit's message. `--amend` changes the code commit's hash —
+   get the NEW hash now (`git rev-parse --short HEAD`) and rename the
+   step-6 file to match (`git mv runs/<old-hash>.json runs/<new-hash>.json`
+   — or just re-derive it fresh from `run.log`, same content either way).
+   Use this NEW hash for both the `runs/` filename and the tsv row: it's
+   the one that stays reachable on the branch and checkable-out going
+   forward, unlike the pre-amend hash from step 4, which no longer is.
+   (This is the one case where the two differ — discard/crash above never
+   amend, so the step-4 hash there is already final.) Append a `keep` row
+   to `results.tsv` and commit both: `git add results.tsv
+   runs/<new-hash>.json && git commit -m "log: keep - aggregate_score
+   X.XXXXXX (was Y.YYYYYY)"`.
 9. Else (`aggregate_score` equal or worse): note the code commit's short
    hash for the tsv row, then `git reset --hard HEAD~1` to discard it.
-   Append a `discard` row to `results.tsv` and commit it: `git add
-   results.tsv && git commit -m "log: discard - aggregate_score X.XXXXXX
-   (was Y.YYYYYY)"`.
+   Append a `discard` row to `results.tsv` and commit both: `git add
+   results.tsv runs/<hash>.json && git commit -m "log: discard -
+   aggregate_score X.XXXXXX (was Y.YYYYYY)"`.
 10. Repeat.
 
 **To replay/audit later**: `git log --oneline` on this branch shows the
 full sequence (interleaved code + log commits for every improvement, log
 commits for every discard/crash); `cat results.tsv` shows the complete
-table at any point in history (`git show <commit>:results.tsv`); and since
-the eval is deterministic, any surviving code commit can be checked out
-and re-run to reproduce its exact score.
+table at any point in history (`git show <commit>:results.tsv`); `cat
+runs/<hash>.json` gives the full per-vehicle telemetry for any single
+experiment, kept or not; and since the eval is deterministic, any
+surviving code commit (i.e. any `keep`) can also be checked out and
+re-run to reproduce its exact score from scratch.
 
 **Timeout**: budget ~5-6 minutes wall-clock per experiment (3 vehicles ×
 ~68s racing+countdown, plus engine startup). If a run meaningfully exceeds
@@ -170,10 +207,55 @@ default command timeout (e.g. a coding agent's shell tool defaulting to
 ~120s), raise it explicitly (~400s) for the eval command — the default is
 not enough and will truncate `run.log` mid-run.
 
+## Analysis tools
+
+The aggregate score tells you THAT a candidate is worse; these help figure
+out WHY, without giving the policy anything that could affect scoring
+(all purely observational):
+
+- **`trace`**: every eval run already includes a tick-sampled array
+  (position, speed, lateral offset, steering, engine force, ~every 0.5s)
+  in each vehicle's result, and therefore in `runs/<hash>.json` for free —
+  no extra step needed. Good first stop before reaching for anything else:
+  `cat runs/<hash>.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['per_vehicle']['tow_truck']['trace'])"`
+  (or similar) shows the shape of a trajectory without re-running anything.
+- **`debug_events`**: `ai_drive_task.gd` may push short labels onto the
+  blackboard var `"debug_events"` at moments worth marking (e.g. "recovery
+  start") — see `README_RESEARCH.md`'s "Analysing a run" section for the
+  exact snippet. Each push shows up timestamped in the eval JSON's
+  `events` list. Cheap, safe to leave in permanently once added.
+- **Screenshots**: when trace + events still don't explain a failure,
+  `res://tests/capture_run.gd` runs ONE vehicle with real rendering and
+  saves PNGs of what the player sees at the start, periodic checkpoints,
+  each debug event, the fall, and the finish:
+
+      /home/maitre/Documents/Godot_v4.7.2-stable_linux.x86_64 \
+          --display-driver x11 --rendering-driver vulkan --resolution 640x360 \
+          --path . --script res://tests/capture_run.gd -- \
+          --vehicle=tow_truck --seconds=65 \
+          --dir=runs/<hash>/tow_truck_capture
+
+  Note this does NOT use `--headless` (its "dummy" rendering driver never
+  produces real pixels — confirmed by testing; every screenshot would come
+  back empty). This briefly opens a real window and is slower than the
+  normal eval, so treat it as an on-demand diagnostic, not something to run
+  every iteration: reach for it after a few discards in a row on the same
+  vehicle without a clear read on why, not by default. If a Godot EDITOR
+  instance is open on this project at the same time, expect this to be
+  noticeably slower or to stall outright (observed directly: two Vulkan
+  clients contending for the same GPU) — close the editor first if a run
+  seems stuck, and give it a generous timeout (2-3 min) regardless. You (the agent) can
+  view the resulting PNGs directly. `runs/**/*.png` is gitignored by
+  default (a merely exploratory look is diagnostic scratch, not part of
+  the permanent record, and an untracked PNG would otherwise trip
+  `check_allowlist.sh` on your next commit). If a set of screenshots was
+  genuinely instructive enough to keep, force-add it explicitly (`git add
+  -f runs/<hash>/<vehicle>_capture/`) and commit it alongside that
+  experiment's log commit, same as `runs/<hash>.json`.
+
 **NEVER STOP** (once past setup): don't pause to ask "should I keep going?".
 Iterate until the human interrupts you. If out of ideas: re-read
 `ai_drive_task.gd`'s own comments for previously-tried-and-reverted ideas
 (don't blindly repeat them without a new angle), try combining two small
-wins, try a different corner of the track (inspect telemetry from
-`res://tests/ai_benchmark.gd`'s richer per-tick metrics if you need more
-signal than the aggregate).
+wins, try a different corner of the track, or use the analysis tools above
+if you need more signal than the aggregate.
