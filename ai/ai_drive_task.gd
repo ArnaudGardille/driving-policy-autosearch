@@ -15,17 +15,17 @@ extends BTAction
 ## Maximum steering angle in radians.
 @export var max_steer: float = 0.4
 ## Minimum speed to maintain (won't slow below this).
-@export var min_speed: float = 4.0
+@export var min_speed: float = 5.0
 ## Maximum target speed.
 @export var max_speed: float = 25.0
 ## How sharply speed drops when approaching a turn (higher = brakes harder).
-@export var braking_factor: float = 3.5
+@export var braking_factor: float = 2.0
 ## How strongly to correct sideways drift back toward the track centerline
 ## (0 = pure pursuit only, which tends to hug one edge; 1 = fully snap back).
 ## 0.75 was found (by benchmark) to be the point where further increases
 ## stop helping -- the remaining limit past that is the shared max_steer
 ## kinematic turning radius, not correction strength.
-@export var cross_track_gain: float = 0.75
+@export var cross_track_gain: float = 0.5
 ## Vertical/horizontal slope ratio above which the AI treats the path as a
 ## climb or descent (ramp) and slows down for it.
 @export var slope_speed_threshold: float = 0.25
@@ -39,24 +39,36 @@ extends BTAction
 @export var track_search_step: float = 0.5
 ## Distance ahead to scan for the tightest UPCOMING curvature, so braking
 ## starts before the corner instead of only reacting once already in it.
-@export var curvature_preview: float = 12.0
+@export var curvature_preview: float = 14.0
 @export var curvature_preview_samples: int = 6
 ## Shrinks the steering look-ahead point in tight turns so the car tracks
 ## the true arc instead of cutting the corner wide. NOTE: measured to be
 ## very sensitive -- too strong a gain makes steering twitchy/oscillatory
 ## and made things worse; keep this low. 0 disables it (fixed look_ahead).
 @export var lookahead_min: float = 3.0
-@export var lookahead_curvature_gain: float = 0.0
+@export var lookahead_curvature_gain: float = 0.25
 ## Extra emergency braking once the car strays this many meters off the
 ## centerline, regardless of curvature, as a last-resort safety margin
 ## before a wheel can reach the physical edge of the road.
-@export var safety_margin: float = 1.1
+@export var safety_margin: float = 0.9
 ## Distance ahead to check for a crest (elevation rises then falls). A crest
 ## can launch the car briefly airborne even when the slope itself isn't
 ## steep, and while airborne steering has no effect -- so it needs its own,
 ## more conservative speed cap independent of the general slope/curvature checks.
 @export var crest_preview: float = 10.0
 @export var crest_speed_cap: float = 6.0
+## If actual speed stays below this (m/s) while the AI is actively trying to
+## accelerate, for longer than stuck_time_threshold, treat the car as
+## physically wedged (e.g. a trailing trailer jack-knifed/snagged on track
+## geometry at a tight corner -- something no amount of sensing the path
+## curve can predict or steer around in advance) and trigger a recovery
+## maneuver rather than grinding the throttle uselessly for the rest of the
+## race.
+@export var stuck_speed_threshold: float = 0.8
+@export var stuck_time_threshold: float = 1.5
+## How long (seconds) a recovery maneuver reverses for before trying forward
+## again.
+@export var recovery_reverse_time: float = 1.2
 
 ## Tracks the car's progress along the curve between ticks. Curve3D's own
 ## get_closest_offset() does a GLOBAL nearest-point search: on a track that
@@ -68,19 +80,26 @@ extends BTAction
 ## only near where we last knew we were keeps localization continuous.
 var _known_offset: float = -1.0
 
+## How long (seconds) actual speed has stayed near-zero despite the AI
+## actively trying to accelerate. See stuck_speed_threshold/stuck_time_threshold.
+var _stuck_timer: float = 0.0
+## Counts down while a recovery (reverse) maneuver is in progress; >0 means
+## "currently recovering".
+var _recovery_timer: float = 0.0
 
-func _tick(_delta: float) -> int:
+
+func _tick(delta: float) -> int:
 	var path: Path3D = _get_bb_var("path") as Path3D
 	var car: VehicleBody3D = _get_bb_var("car") as VehicleBody3D
 
 	if not path or not car:
 		return BTTask.FAILURE
 
-	_drive(car, path)
+	_drive(car, path, delta)
 	return BTTask.RUNNING
 
 
-func _drive(car: VehicleBody3D, path: Path3D) -> void:
+func _drive(car: VehicleBody3D, path: Path3D, delta: float) -> void:
 	var curve: Curve3D = path.curve
 	if not curve or curve.point_count < 2:
 		return
@@ -130,6 +149,17 @@ func _drive(car: VehicleBody3D, path: Path3D) -> void:
 	# Compute steering angle: atan2 of the local X (right) and Z (forward).
 	var steer_angle: float = atan2(local_target.x, local_target.z)
 	steer_angle = clampf(steer_angle, -max_steer, max_steer)
+
+	# --- Recovery: if wedged (see stuck detection below), reverse out with
+	# opposite steering instead of grinding the throttle in place. Same
+	# control surface a human stuck in a ditch would use.
+	if _recovery_timer > 0.0:
+		_recovery_timer -= delta
+		car.steering = clampf(-steer_angle, -max_steer, max_steer)
+		car.engine_force = -engine_power
+		car.brake = 0.0
+		return
+
 	car.steering = steer_angle
 
 	# --- Throttle ---
@@ -141,12 +171,16 @@ func _drive(car: VehicleBody3D, path: Path3D) -> void:
 	if curvature > 0.3:
 		target_speed = lerpf(max_speed, min_speed, clampf((curvature - 0.3) * braking_factor, 0.0, 1.0))
 
-	# Slow down for steep climbs/descents (ramps) so the car doesn't launch
-	# off crests or lose traction on landings.
+	# Slow down for steep DESCENTS (ramps) so the car doesn't lose traction on
+	# landing. Climbs are deliberately NOT braked for: a climb needs momentum
+	# to crest, not less of it -- braking here used to strand the heaviest
+	# vehicle (tow_truck, dragging a trailer) partway up a steep hill, unable
+	# to regain enough speed afterwards to finish the climb at all.
 	var p_prev: Vector3 = curve.sample_baked(maxf(current_offset - 1.0, 0.0))
 	var p_next: Vector3 = curve.sample_baked(minf(current_offset + 1.0, total_length))
 	var run: float = Vector2(p_next.x - p_prev.x, p_next.z - p_prev.z).length()
-	var slope: float = absf(p_next.y - p_prev.y) / maxf(run, 0.001)
+	var signed_slope: float = (p_next.y - p_prev.y) / maxf(run, 0.001)
+	var slope: float = maxf(-signed_slope, 0.0)
 	if slope > slope_speed_threshold:
 		var slope_target: float = lerpf(max_speed, min_speed,
 				clampf((slope - slope_speed_threshold) * slope_braking_factor, 0.0, 1.0))
@@ -176,6 +210,18 @@ func _drive(car: VehicleBody3D, path: Path3D) -> void:
 	else:
 		car.engine_force = 0.0
 		car.brake = clampf((current_speed - target_speed) * 0.5, 0.0, 5.0)
+
+	# Stuck detection: actively trying to accelerate but barely moving, for
+	# too long, means something off the AI's radar (e.g. a trailer snagged on
+	# track geometry) is physically blocking forward progress. Trigger a
+	# recovery maneuver rather than sitting there at full throttle forever.
+	if car.engine_force > 0.0 and current_speed < stuck_speed_threshold:
+		_stuck_timer += delta
+		if _stuck_timer > stuck_time_threshold:
+			_recovery_timer = recovery_reverse_time
+			_stuck_timer = 0.0
+	else:
+		_stuck_timer = 0.0
 
 
 ## Finds the car's offset along the curve. On the very first tick (or if we

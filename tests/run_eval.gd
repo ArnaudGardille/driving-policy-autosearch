@@ -18,6 +18,9 @@ extends SceneTree
 ##                      car_base, trailer_truck, tow_truck
 ##   --overrides=JSON   JSON object of AIDriveTask exported properties to
 ##                      override, e.g. for a parameter sweep
+##   --repeats=N        run each vehicle N times instead of once (default 1)
+##                      and take the WORST (min-score) run per vehicle --
+##                      see determinism caveat below.
 ##
 ## Prints one line of JSON as the LAST line of stdout (Godot itself prints a
 ## version banner before the script runs, so callers should parse the last
@@ -31,6 +34,20 @@ extends SceneTree
 ## human", and a human can pick any of the three, so a policy that only
 ## drives well in its favorite car is not a better policy and must not be
 ## able to hide that behind an average.
+##
+## DETERMINISM CAVEAT (found the hard way -- see PROGRAM.md): this project
+## uses Jolt Physics, which by default runs a multi-threaded job system and
+## does NOT guarantee bit-for-bit identical results between runs -- contact
+## resolution order can vary with OS thread scheduling, which varies with
+## system load. For a policy with a comfortable margin this never matters.
+## For one sitting at a razor-thin margin (confirmed: the same committed
+## code scored a full win in one run and failed to finish in another,
+## re-run minutes apart, no code changed in between) it can flip the
+## outcome entirely. `--repeats` exists to catch exactly that: a policy
+## that only clears the bar SOMETIMES is not a reliably better policy,
+## the same way one that only drives well in its favorite car isn't --
+## consistent with this project's own "minimum, not mean" philosophy,
+## just extended from "worst vehicle" to "worst vehicle across worst run."
 
 const VEHICLE_SCENES := {
 	"car_base": "res://vehicles/car_base.tscn",
@@ -62,6 +79,10 @@ func _init() -> void:
 	if args.has("vehicles"):
 		vehicle_keys = String(args["vehicles"]).split(",", false)
 
+	var repeats: int = 1
+	if args.has("repeats"):
+		repeats = String(args["repeats"]).to_int()
+
 	var per_vehicle := {}
 	var scores: Array[float] = []
 
@@ -70,10 +91,43 @@ func _init() -> void:
 			push_error("Unknown vehicle '%s'. Valid: %s" % [key, ", ".join(VEHICLE_SCENES.keys())])
 			ok = false
 			continue
-		var result: Dictionary = await AIBenchmark.run(
-				self, racing_seconds, overrides, VEHICLE_SCENES[key])
-		per_vehicle[key] = result
-		scores.append(result.get("score", 0.0))
+
+		# Run `repeats` times and keep the WORST (min-score) one as the
+		# headline result for this vehicle -- see the determinism caveat
+		# above. All individual runs are preserved under "repeats" (when
+		# repeats > 1) for audit; when repeats == 1 (the default) this is
+		# exactly the single-run behavior from before --repeats existed.
+		var runs: Array = []
+		var worst_score := INF
+		var worst_run: Dictionary = {}
+		var all_fair := true
+		for _r in range(maxi(repeats, 1)):
+			var result: Dictionary = await AIBenchmark.run(
+					self, racing_seconds, overrides, VEHICLE_SCENES[key])
+			runs.append(result)
+			if not result.get("fair", false):
+				all_fair = false
+			var s: float = result.get("score", 0.0)
+			if s < worst_score:
+				worst_score = s
+				worst_run = result
+
+		var summary: Dictionary = worst_run.duplicate()
+		summary["score"] = worst_score
+		summary["fair"] = all_fair
+		if repeats > 1:
+			summary["repeats"] = runs
+		per_vehicle[key] = summary
+		scores.append(summary.get("score", 0.0))
+		if not summary.get("fair", false):
+			# A run that exceeds the human's own steering/engine-force
+			# ceiling is not a legitimate result, no matter how good its
+			# score looks -- fail the whole eval rather than let an unfair
+			# run's score sneak into the aggregate.
+			ok = false
+			push_error("FAIRNESS VIOLATION on '%s': max_steering_used=%.3f (limit %.3f), max_engine_force_used=%.3f (ceiling %.3f)" % [
+				key, summary.get("max_steering_used", 0.0), summary.get("steer_limit", 0.0),
+				summary.get("max_engine_force_used", 0.0), summary.get("engine_force_ceiling", 0.0)])
 
 	var mean_score := 0.0
 	var min_score := 0.0

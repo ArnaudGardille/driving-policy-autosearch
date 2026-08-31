@@ -40,9 +40,13 @@ drives well in its favorite one is not a better policy.
 
 ## What must never change
 
-Enforced mechanically by `tools/check_allowlist.sh` — run it before every
-eval and reject (do not score, do not accept) any candidate whose diff fails
-it:
+Enforced mechanically, in two layers — a candidate is rejected if it fails
+either one, independent of what score it would otherwise have gotten:
+
+**1. File-level allowlist** (`tools/check_allowlist.sh`, run before every
+eval): rejects any candidate whose change set — staged, unstaged, *and*
+untracked new files, not just `git diff` — touches anything outside
+`res://ai/`:
 
 - `res://vehicles/*.gd` — car physics: steering limit, engine force, mass,
   suspension. This *is* the "same car as the human" guarantee.
@@ -52,11 +56,28 @@ it:
 - `res://tests/*.gd` — the judge that scores the candidate. It must not be
   able to grade its own homework.
 
+**2. Runtime fairness check** (built into `res://tests/ai_benchmark.gd`,
+reported as `fair`/`ok` in the eval JSON): the file allowlist stops a
+candidate from *editing* `vehicle.gd`, but nothing stops code living inside
+the *allowed* `ai_drive_task.gd` from just calling `car.engine_force` /
+`car.steering` with values a human could never reach (e.g. quietly bumping
+its own `engine_power` export past what the player's own car ever applies).
+Since `ai_drive_task.gd` fully owns those properties every tick while the AI
+drives, this can only be caught by checking the values actually *applied* to
+the car, every tick, against the car's own frozen constants — not by
+reading the policy script's intentions. Every eval run tracks the peak
+`engine_force` and `steering` actually used and compares them against the
+car's own `STEER_LIMIT` and the shared low-speed-boost ceiling of `100.0`
+(the highest `engine_force` a human can ever get from `vehicle.gd`, at any
+speed). A violation sets `fair: false` and `ok: false` in the output —
+treat that as an automatic reject, regardless of the score value.
+
 ## How to evaluate a candidate
 
 Headless, deterministic, no editor required:
 
-    <godot-binary> --headless --path <repo> --script res://tests/run_eval.gd -- \
+    /home/maitre/Documents/Godot_v4.7.2-stable_linux.x86_64 --headless --path . \
+        --script res://tests/run_eval.gd -- \
         --seconds=65 --vehicles=car_base,trailer_truck,tow_truck
 
 Optional flags: `--overrides={"cross_track_gain":0.75}` (JSON object of
@@ -65,9 +86,44 @@ script).
 
 Prints one line of JSON as the LAST line of stdout (Godot prints a version
 banner first) with a `score` per vehicle plus `aggregate_score`. Exit code
-is non-zero on any failure (bad args, unknown vehicle, script error) —
-treat that as "do not accept this candidate", independent of whatever score
-value is or isn't present in the output.
+is non-zero on any failure — bad args, unknown vehicle, script error, *or a
+fairness violation* — treat that as "do not accept this candidate",
+independent of whatever score value is or isn't present in the output.
+
+## Analysing a run
+
+The aggregate JSON (`score`, `fair`, `distance_m`, etc.) tells you *that*
+something went wrong; these three additions help with *why*, without giving
+the policy anything it could use to cheat (all purely observational, none
+of it feeds back into scoring):
+
+- **`trace`** — every eval run includes a tick-sampled array (position,
+  speed, lateral offset, steering, engine force, every ~0.5s) in its
+  per-vehicle result and therefore in `runs/<hash>.json` (see "Logging
+  results" in `PROGRAM.md`). Always on, free (no GPU needed) — read it back
+  to see the shape of a trajectory or spot oscillation after the fact,
+  without re-running anything.
+- **`debug_events`** — `ai_drive_task.gd` (or any `ai/` script) may push
+  short string labels onto the blackboard var `"debug_events"` at moments
+  worth marking (e.g. when a stuck-recovery maneuver triggers):
+
+      var bb := get_blackboard()
+      var events: Array = bb.get_var("debug_events") if bb.has_var("debug_events") else []
+      events.append("recovery start")
+      bb.set_var("debug_events", events)
+
+  Each push is timestamped and returned in the eval JSON's `events` list.
+  This is additive to "what you CAN do" — it's observation, not actuation,
+  so it doesn't touch the control surface and can't affect fairness.
+- **Screenshots** (`res://tests/capture_run.gd`) — an on-demand tool,
+  separate from the main eval, that runs ONE vehicle with real rendering
+  and saves PNGs of what the player would see at the run's start, periodic
+  checkpoints, each `debug_events` entry, the fall moment, and the finish
+  moment. Reach for this when telemetry alone doesn't explain a failure —
+  not as a replacement for the normal fast loop, and not every iteration
+  (it needs a real window/GPU, so it's slower and can't run under
+  `--headless`). See the header comment in `capture_run.gd` for the
+  invocation, or `PROGRAM.md`'s "Analysis tools" section.
 
 ## Recommended loop (per candidate)
 
