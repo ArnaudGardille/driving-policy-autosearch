@@ -188,6 +188,13 @@ button_pressed = true
 tooltip_text = "Let the AI (LimboAI) drive your selected car instead of you"
 text = "AI Drive"
 
+[node name="RandomTrack" type="CheckBox" parent="OptionsPanel/MarginContainer/HBoxContainer" unique_id=555000112]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+tooltip_text = "Replace the track with a new procedurally generated one each race"
+text = "Random Track"
+
 [node name="Audio" type="HBoxContainer" parent="OptionsPanel/MarginContainer/HBoxContainer" unique_id=1143737421]
 layout_mode = 2
 size_flags_horizontal = 3
