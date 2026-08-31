@@ -170,7 +170,19 @@ LOOP:
    git commit -m "log: crash - <hypothesis>"`. (If step 5 crashed before
    producing any JSON at all — no parseable last line — skip the
    `runs/<hash>.json` file for that row; note that in the description.)
-8. Else if `aggregate_score` improved: `git commit --amend -m "<hypothesis>
+8. Else if `aggregate_score` improved: **before treating this as a real
+   keep, re-run the SAME candidate with `--repeats=3`** (adds `repeats:
+   [...]` per vehicle to the JSON, only for the vehicles that were near
+   the margin is fine if time-constrained, but when in doubt re-run all
+   of them). This project's eval is NOT bit-for-bit deterministic between
+   runs (Jolt Physics' default multi-threaded solver — confirmed directly:
+   the same committed code, re-run minutes apart with zero code changes,
+   scored a full win once and failed to finish another time). A single
+   good run can be luck, not a real improvement. Use the worst-of-3
+   `aggregate_score` as the real number for the "was Y.YYYYYY" comparison
+   below — if it no longer beats the previous best under `--repeats=3`,
+   this is NOT a keep, treat it as step 9 (discard) instead. If it does:
+   `git commit --amend -m "<hypothesis>
    — aggregate_score X.XXXXXX (was Y.YYYYYY)"` to bake the real result into
    the code commit's message. `--amend` changes the code commit's hash —
    get the NEW hash now (`git rev-parse --short HEAD`) and rename the
@@ -206,6 +218,21 @@ that, kill it, log `crash`, and revert. If your tool invocation has its own
 default command timeout (e.g. a coding agent's shell tool defaulting to
 ~120s), raise it explicitly (~400s) for the eval command — the default is
 not enough and will truncate `run.log` mid-run.
+
+**Determinism caveat**: despite this doc's earlier claim that "the eval is
+deterministic," it is NOT bit-for-bit reproducible in general. This
+project uses Jolt Physics with its default multi-threaded solver, which
+does not guarantee identical results between runs — contact resolution
+order can vary with OS thread scheduling. Confirmed directly: the exact
+same committed `ai_drive_task.gd`, re-run minutes apart with zero code
+changes, scored a full win on one run and failed to finish on another; a
+`--repeats=3` re-run of that same commit produced three DIFFERENT scores
+(none of them a win). In practice this is invisible for a policy with a
+comfortable margin (car_base and trailer_truck reproduced identically
+across many runs) but real for one sitting at a narrow margin — exactly
+the kind of local optimum this loop tends to find for the hardest
+vehicle. This is why step 8 below requires a `--repeats=3` re-check
+before trusting a "keep": a single good run is not sufficient evidence.
 
 ## Analysis tools
 
