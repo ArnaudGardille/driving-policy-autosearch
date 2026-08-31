@@ -57,9 +57,9 @@ const VEHICLE_SCENES := {
 const DEFAULT_RACING_SECONDS := 65.0
 ## Must match ai_benchmark.gd's own _TRACE_INTERVAL_S -- see class doc above.
 const TRACE_INTERVAL_S := 0.5
-## Comfortably above (racing_seconds / TRACE_INTERVAL_S) plus a couple of
-## one-off event shots, so capture never stops early and clips real data.
-const MAX_SHOTS := 400
+## Extra headroom (beyond the interval-cadence count) for the one-off
+## fell_off/finish/debug_event shots AIBenchmark also takes.
+const MAX_SHOTS_MARGIN := 20
 
 ## Runtime-mounted recording camera: local mount point in the car's own
 ## reference frame (roughly windshield height, a bit back from the nose),
@@ -102,11 +102,18 @@ func _init() -> void:
 			return
 
 	var dir_abs: String = ProjectSettings.globalize_path(dir) if dir.begins_with("res://") else dir
+	# Sized from the ACTUAL racing_seconds, not a fixed constant -- a cap
+	# sized only for the 65s default silently truncated the dataset's tail
+	# on longer --seconds captures (AIBenchmark's screenshot cap stops
+	# adding shots once hit, while `trace` keeps growing unbounded, and
+	# _build_manifest() below only warns about the mismatch, it doesn't
+	# fail loudly).
+	var max_shots: int = int(racing_seconds / TRACE_INTERVAL_S) + MAX_SHOTS_MARGIN
 	var capture := {
 		"enabled": true,
 		"dir": dir_abs,
 		"interval_s": TRACE_INTERVAL_S,
-		"max_shots": MAX_SHOTS,
+		"max_shots": max_shots,
 	}
 
 	# Runs concurrently with AIBenchmark.run() below (fire-and-not-awaited-
@@ -144,14 +151,26 @@ func _init() -> void:
 
 
 ## Waits for the car to exist (group "car", set in every vehicle .tscn --
-## see vehicle.gd), then waits a further fixed margin before mounting+
-## activating the recording camera, so this camera's own make_current()
-## call is the one that sticks. race_manager.gd's start_race() calls
-## make_current() on the car's default chase camera during its own setup;
-## since that timing isn't exposed to hook into directly, this polls
-## instead. There's a full COUNTDOWN_DURATION (3s / ~180 physics ticks)
+## see vehicle.gd), then waits a further fixed WALL-CLOCK margin before
+## mounting+activating the recording camera, so this camera's own
+## make_current() call is the one that sticks. race_manager.gd's
+## start_race() calls make_current() on the car's default chase camera
+## during its own setup; since that timing isn't exposed to hook into
+## directly, this polls instead. There's a full COUNTDOWN_DURATION (3s)
 ## before AIBenchmark.run() starts sampling/capturing anything, so a
-## one-second margin here is comfortably safe.
+## real-time margin here is comfortably safe.
+##
+## Deliberately a TIME-based wait (create_timer), not a process-frame-count
+## loop: this project's own docs (this file's header, and
+## tests/capture_run.gd's) call out that an open Godot editor makes runs
+## "noticeably slower" via GPU contention -- and under that exact slowdown,
+## Godot's physics-catchup runs MULTIPLE physics ticks per rendered process
+## frame to keep up. COUNTDOWN_DURATION is measured in physics ticks, so a
+## process-frame-count margin can complete AFTER those 3s/180 ticks have
+## already elapsed and AIBenchmark has started capturing -- silently
+## poisoning the first interval screenshot(s) with the wrong (still
+## reorienting-chase-cam) view. A real-time timer doesn't have that failure
+## mode: physics ticks catching up doesn't make wall-clock time pass faster.
 func _mount_camera_when_ready() -> void:
 	var car: Node = null
 	for i in range(600): # up to ~10s at 60fps -- generous, this is a poll not a deadline
@@ -163,8 +182,7 @@ func _mount_camera_when_ready() -> void:
 		push_warning("record_dataset: car never appeared in group 'car' -- recording camera not mounted, screenshots will show the default chase cam instead.")
 		return
 
-	for i in range(60):
-		await process_frame
+	await create_timer(1.5).timeout
 
 	var recording_camera := Camera3D.new()
 	recording_camera.fov = CAMERA_FOV
@@ -181,11 +199,18 @@ func _build_manifest(result: Dictionary) -> Dictionary:
 	var trace: Array = result.get("trace", [])
 	var screenshots: Array = result.get("screenshots", [])
 
+	# Fully anchored to the EXACT interval-shot filename shape
+	# ("%03d_t%.0fs.png", from ai_benchmark.gd's _capture_shot()) -- a
+	# suffix-only match ("_t\d+s.png$") would also match an off-cadence
+	# debug_events shot whose label happens to end that way (e.g.
+	# "003_event_stuck_recovery_t3s.png"), silently pairing it into `trace`
+	# alignment as if it were a real interval shot. Dormant today only
+	# because Tier A's ai_drive_task.gd currently pushes no debug_events.
 	var re := RegEx.new()
-	re.compile("_t\\d+s\\.png$")
+	re.compile("^\\d+_t\\d+s\\.png$")
 	var interval_shots: Array = []
 	for path: String in screenshots:
-		if path != "" and re.search(path):
+		if path != "" and re.search(path.get_file()):
 			interval_shots.append(path)
 
 	var pair_count: int = mini(trace.size(), interval_shots.size())
