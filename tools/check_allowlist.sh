@@ -38,7 +38,21 @@ fi
 VIOLATIONS=""
 while IFS= read -r f; do
 	[ -z "$f" ] && continue
-	if [[ ! "$f" =~ ^ai/ ]]; then
+	if [[ "$f" == *" -> "* ]]; then
+		# Rename/copy line ("old/path -> new/path", after stripping the 2-char
+		# XY status + space that `git status --porcelain` prefixes it with).
+		# Check BOTH sides: a frozen file disappearing (old path outside ai/)
+		# is exactly as out-of-bounds as one appearing (new path outside
+		# ai/) -- and checking only the combined string against `^ai/` let
+		# `ai/x.gd -> vehicles/vehicle.gd` (overwriting a frozen file with a
+		# rename) pass, since the string itself starts with "ai/" even
+		# though the actual write lands outside it.
+		old_path="${f%% -> *}"
+		new_path="${f##* -> }"
+		if [[ ! "$old_path" =~ ^ai/ ]] || [[ ! "$new_path" =~ ^ai/ ]]; then
+			VIOLATIONS+="  $f"$'\n'
+		fi
+	elif [[ ! "$f" =~ ^ai/ ]]; then
 		VIOLATIONS+="  $f"$'\n'
 	fi
 done <<< "$CHANGED"

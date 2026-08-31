@@ -101,12 +101,21 @@ func _init() -> void:
 		var worst_score := INF
 		var worst_run: Dictionary = {}
 		var all_fair := true
+		# Separate from worst_run: with --repeats > 1, the lowest-scoring
+		# repeat isn't necessarily the one that violated fairness (a run can
+		# score badly for reasons unrelated to fairness, while a DIFFERENT,
+		# better-scoring repeat is the one that exceeded the steering/engine-
+		# force ceiling). Tracked so the diagnostic below reports the actual
+		# offending run's numbers, not whichever run happened to score worst.
+		var unfair_run: Dictionary = {}
 		for _r in range(maxi(repeats, 1)):
 			var result: Dictionary = await AIBenchmark.run(
 					self, racing_seconds, overrides, VEHICLE_SCENES[key])
 			runs.append(result)
 			if not result.get("fair", false):
 				all_fair = false
+				if unfair_run.is_empty():
+					unfair_run = result
 			var s: float = result.get("score", 0.0)
 			if s < worst_score:
 				worst_score = s
@@ -123,11 +132,12 @@ func _init() -> void:
 			# A run that exceeds the human's own steering/engine-force
 			# ceiling is not a legitimate result, no matter how good its
 			# score looks -- fail the whole eval rather than let an unfair
-			# run's score sneak into the aggregate.
+			# run's score sneak into the aggregate. Report unfair_run's own
+			# numbers here (see its doc above), not summary's/worst_run's.
 			ok = false
 			push_error("FAIRNESS VIOLATION on '%s': max_steering_used=%.3f (limit %.3f), max_engine_force_used=%.3f (ceiling %.3f)" % [
-				key, summary.get("max_steering_used", 0.0), summary.get("steer_limit", 0.0),
-				summary.get("max_engine_force_used", 0.0), summary.get("engine_force_ceiling", 0.0)])
+				key, unfair_run.get("max_steering_used", 0.0), unfair_run.get("steer_limit", 0.0),
+				unfair_run.get("max_engine_force_used", 0.0), unfair_run.get("engine_force_ceiling", 0.0)])
 
 	var mean_score := 0.0
 	var min_score := 0.0
