@@ -142,3 +142,11 @@ the screen. This has not been restricted. Any research loop is free to
 *try* something more sensor-realistic, but should not treat loosening this
 constraint as free progress — flag it explicitly if a candidate's gains come
 from privileged sensing rather than a better driving policy.
+
+**Branch `autoresearch/tier-b-<date>` is exactly that experiment**: its
+`ai_drive_task.gd` reads no `Path3D` curve at all (the `"path"` blackboard
+var is still set by `race_manager.gd` but never read) — only whisker
+raycasts against the track surface and onboard proprioception, via
+`ai/onboard_sensing.gd`. It exists specifically to measure how much of
+Tier A's score comes from curve access vs. driving-policy quality. See
+`ai/COMPARISON.md` for the side-by-side results across sensing tiers.
