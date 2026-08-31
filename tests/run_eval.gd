@@ -8,7 +8,11 @@ extends SceneTree
 ##
 ##   godot --headless --path <repo> --script res://tests/run_eval.gd -- \
 ##       --seconds=65 --vehicles=car_base,trailer_truck,tow_truck \
-##       --overrides={"cross_track_gain":0.75}
+##       --overrides={"some_exported_property":1.0}   # see whichever
+##                      ai_drive_task.gd variant is currently checked out
+##                      for its actual @export property names -- they
+##                      differ between tiers/branches, unlike this comment,
+##                      which is shared across all of them
 ##
 ## All flags are optional:
 ##   --seconds=N       racing time budget per vehicle (default 65, a few

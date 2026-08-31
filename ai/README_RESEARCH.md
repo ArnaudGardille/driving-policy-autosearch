@@ -80,9 +80,10 @@ Headless, deterministic, no editor required:
         --script res://tests/run_eval.gd -- \
         --seconds=65 --vehicles=car_base,trailer_truck,tow_truck
 
-Optional flags: `--overrides={"cross_track_gain":0.75}` (JSON object of
+Optional flags: `--overrides={"some_exported_property":1.0}` (JSON object of
 `AIDriveTask` exported properties, for parameter sweeps without editing the
-script).
+script -- see the currently-checked-out `ai_drive_task.gd`'s own `@export`
+list for valid keys; they differ between tiers/branches).
 
 Prints one line of JSON as the LAST line of stdout (Godot prints a version
 banner first) with a `score` per vehicle plus `aggregate_score`. Exit code
