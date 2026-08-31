@@ -69,6 +69,31 @@ extends BTAction
 ## How long (seconds) a recovery maneuver reverses for before trying forward
 ## again.
 @export var recovery_reverse_time: float = 1.2
+## On the tightest corners (found: a switchback whose curve loops back on
+## itself over a very short chord -- see stuck_speed_threshold doc), a towed
+## vehicle dragged behind on a passive chain (no steering/engine control of
+## its own -- see tow_truck.tscn) can build up enough lateral swing on a
+## normal-speed, centerline entry that it gets caught by the tight radius no
+## recovery maneuver can then escape (confirmed: even a maximal alternating
+## steering-lock recovery produced zero net displacement once wedged).
+## Slowing down only once already inside the corner (the normal
+## curvature_preview window, 14m) was too late for this one -- these params
+## look much further ahead, for a much tighter threshold, and slow down
+## earlier so the entry itself is gentler, rather than reacting after the
+## swing has already started. (A wide-line aim-point bias was also tried
+## alongside this, to widen the effective radius -- it made things worse,
+## pushing the car off the track edge instead; the early speed cap alone is
+## what fixes it.)
+@export var hairpin_preview: float = 30.0
+## Total ACCUMULATED heading change (radians, summed over hairpin_preview) --
+## not a pointwise curvature value like the other thresholds in this file.
+## Measured directly against this track's real curve: this specific
+## switchback accumulates roughly 3-5 rad of total turning over its length
+## (matching its near-300-degree loop-back shape), while ordinary corners
+## elsewhere accumulate well under half that over the same distance -- 2.0
+## sits between the two with margin.
+@export var hairpin_curvature_threshold: float = 2.0
+@export var hairpin_speed_cap: float = 8.0
 
 ## Tracks the car's progress along the curve between ticks. Curve3D's own
 ## get_closest_offset() does a GLOBAL nearest-point search: on a track that
@@ -117,6 +142,11 @@ func _drive(car: VehicleBody3D, path: Path3D, delta: float) -> void:
 	var immediate_curvature: float = absf(dir_current.angle_to(dir_near_ahead))
 	var upcoming_curvature: float = _max_curvature_ahead(curve, current_offset, total_length)
 	var curvature: float = maxf(immediate_curvature, upcoming_curvature)
+
+	# --- Hairpin handling (see hairpin_preview doc): look much further ahead
+	# than the normal curvature preview, for a much tighter threshold, so an
+	# extreme switchback is detected and slowed for well before turn-in.
+	var hairpin_active: bool = _hairpin_ahead(curve, current_offset, total_length, dir_current)
 
 	# --- Steering ---
 	# Shrink the pursuit look-ahead in tight turns so the aim point tracks
@@ -170,6 +200,12 @@ func _drive(car: VehicleBody3D, path: Path3D, delta: float) -> void:
 	var target_speed: float = max_speed
 	if curvature > 0.3:
 		target_speed = lerpf(max_speed, min_speed, clampf((curvature - 0.3) * braking_factor, 0.0, 1.0))
+
+	# Extreme hairpin ahead: cap speed hard and much earlier than the normal
+	# curvature-based braking above (which only previews curvature_preview
+	# meters ahead) -- see hairpin_preview doc.
+	if hairpin_active:
+		target_speed = minf(target_speed, hairpin_speed_cap)
 
 	# Slow down for steep DESCENTS (ramps) so the car doesn't lose traction on
 	# landing. Climbs are deliberately NOT braked for: a climb needs momentum
@@ -264,6 +300,31 @@ func _max_curvature_ahead(curve: Curve3D, start_offset: float, total_length: flo
 		var d2 := _sample_direction(curve, offset + 1.0, total_length)
 		max_c = maxf(max_c, absf(d1.angle_to(d2)))
 	return max_c
+
+
+## Scans a much longer window ahead than _max_curvature_ahead and sums the
+## TOTAL heading change across it (not just the sharpest single point).
+## Pointwise curvature alone turned out not to distinguish this one extreme
+## switchback from an ordinary tight corner: sampled over a short (2m)
+## window, its peak is only middlingly higher than plenty of normal bends
+## the existing curvature-based braking already handles fine (confirmed by
+## direct measurement against the real track curve). What actually sets it
+## apart is that the direction reverses almost entirely (near 300 degrees,
+## matching the earlier Bezier-handle-vs-chord finding) over the space of
+## ~30-40m -- a normal corner accumulates nowhere near that much total
+## turning over the same distance.
+func _hairpin_ahead(curve: Curve3D, start_offset: float, total_length: float, dir_current: Vector3) -> bool:
+	var samples: int = 16
+	var step: float = hairpin_preview / float(samples)
+	var prev_dir: Vector3 = dir_current
+	var total_turn := 0.0
+	for i in range(1, samples + 1):
+		var offset: float = minf(start_offset + step * i, total_length)
+		var d := _sample_direction(curve, offset, total_length)
+		total_turn += absf(prev_dir.angle_to(d))
+		prev_dir = d
+
+	return total_turn > hairpin_curvature_threshold
 
 
 ## True if the path climbs and then descends within the preview window
