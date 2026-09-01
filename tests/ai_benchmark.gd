@@ -7,8 +7,10 @@ class_name AIBenchmark
 
 ## Runs the AI for `racing_seconds` of actual racing time (after the fixed
 ## countdown) and returns a Dictionary of performance metrics. `overrides` lets
-## callers poke exported properties on the AIDriveTask (e.g. {"cross_track_gain": 0.0})
-## for ablation testing without editing the script. `vehicle_scene_path` picks
+## callers poke exported properties on the currently-checked-out
+## ai_drive_task.gd (property names differ between tiers/branches -- see its
+## own @export list) for ablation testing without editing the script.
+## `vehicle_scene_path` picks
 ## which car to drive -- a policy tuned against only one vehicle can look
 ## better than it is, so callers doing real comparisons should run this for
 ## every vehicle the human can actually pick and aggregate conservatively
