@@ -85,6 +85,12 @@ extends BTAction
 ## edge" and brake hard regardless of heading -- same role as Tier A's
 ## safety_margin.
 @export var edge_safety_margin: float = 3.0
+## Angular velocity around the car's up axis (rad/s) above which the car is
+## treated as turning/rotating fast enough to brake toward min_speed*0.5 and
+## help regain control. See the yaw-rate safety net's inline doc (in
+## _drive()) for the screenshot diagnosis that motivated this and why 0.5
+## (empirically swept, not Tier A's 1.2) is the calibrated value here.
+@export var yaw_rate_threshold: float = 0.5
 ## Below this fraction of the maximum possible whisker confirmation-weight
 ## sum (see heading_steer's weight_sum -- every forward whisker confirming
 ## pavement at distance 0 would be 1.0), start braking proportionally.
@@ -263,6 +269,25 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 	# probes since this tier has no curve).
 	if maxf(left_distance, right_distance) > edge_probe_max_range - edge_safety_margin:
 		target_speed = minf(target_speed, min_speed)
+
+	# Yaw-rate safety net: brake hard if the car is turning/rotating fast
+	# (spinning, not just cornering). Screenshot diagnosis
+	# (runs/diag_tow_capture/012_t24s.png) showed tow_truck rotated ~90
+	# degrees sideways, wedged across the narrow bridge approaching the
+	# HugeTire tunnel -- a spin-out, a different failure mode from the
+	# forward wedge every other fix targeted (results.tsv 786fc0a onward),
+	# which is why none of them helped. Tier A tried a yaw-rate net before
+	# (threshold 1.2 rad/s) and reverted it as miscalibrated for THAT
+	# tier's curve-following policy -- ordinary hard cornering there
+	# already produced ~2 rad/s. Empirically swept for this tier instead of
+	# assuming the same number applies (0.5-3.0 tried, see results.tsv):
+	# 0.5 rad/s is where it actually engages usefully here -- this tier's
+	# whisker-driven steering apparently doesn't produce Tier A's ~2 rad/s
+	# yaw rates even in normal hard turns, so a much lower threshold is
+	# both correctly calibrated and safe here.
+	var yaw_rate: float = absf(car.angular_velocity.y)
+	if yaw_rate > yaw_rate_threshold:
+		target_speed = minf(target_speed, min_speed * 0.5)
 
 	# Apply throttle or brake. Mirrors the player's own low-speed torque
 	# boost (vehicle.gd) so the AI's acceleration curve matches the human's
