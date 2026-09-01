@@ -6,5 +6,5 @@
 script = ExtResource("1_drive")
 
 [resource]
-description = "LimboAI driver: follows the racetrack Path3D using the AIDriveTask. Reads 'car' and 'path' from the blackboard."
+description = "LimboAI driver: Tier B AIDriveTask, drives on vehicle-relative whisker/edge-probe sensing only. Reads 'car' from the blackboard ('path' is still set by race_manager.gd but deliberately never read -- see ai/README_RESEARCH.md)."
 root_task = SubResource("BTAction_drive")
