@@ -12,6 +12,7 @@ var audio_master: int = AudioServer.get_bus_index("Master")
 @onready var button_sdfgi: CheckBox = $%SDFGI
 @onready var button_race_mode: CheckBox = $%RaceMode
 @onready var button_ai_drive: CheckBox = $%AIDrive
+@onready var button_random_track: CheckBox = $%RandomTrack
 @onready var button_mute: TextureButton = %Mute
 @onready var slider_volume: HSlider = %Volume
 
@@ -86,6 +87,7 @@ func _load_race_scene(car_scene: PackedScene) -> void:
 	get_parent().add_child(_race_scene)
 	# Pass whether the AI should drive the selected car (LimboAI autopilot).
 	_race_scene.ai_enabled = button_ai_drive.button_pressed
+	_race_scene.randomize_track = button_random_track.button_pressed
 	_race_scene.start_race(car)
 
 
