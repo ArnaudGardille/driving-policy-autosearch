@@ -23,6 +23,29 @@ extends BTAction
 ## Maximum target speed.
 @export var max_speed: float = 25.0
 
+## --- Trailer-aware steering smoothing: OnboardSensing.collect_body_rids(car)
+## already walks the car's own scene root every tick to build the whisker
+## raycast exclude list; its SIZE, for free, tells us the shape of this
+## vehicle's attached bodies -- car_base has exactly 1 PhysicsBody3D under
+## its root, trailer_truck has 2 (body + one rigidly-jointed Trailer),
+## tow_truck has 7 (body + 5 chain links + towed Body2). This is
+## introspection of the AI's OWN vehicle structure, not the track curve or
+## race_manager state, and not hidden from a human, who obviously knows by
+## looking whether they're towing a trailer.
+## Screenshot diagnosis (runs/diag_trailer_capture/) showed trailer_truck's
+## failure at the HugeTire tunnel/hairpin (ai/COMPARISON.md) is a Y FALL,
+## consistent with the towed Trailer body swinging wide on the hairpin.
+## Slowing trailer_truck down (min_speed floor scale) helped in its best
+## run but stayed high-variance across 3 tried scales (results.tsv
+## 1c3bcc7/e1cc363/afa09d0) -- the worst case barely moved, suggesting raw
+## speed isn't the dominant factor. Trying a different angle instead:
+## SMOOTHING steering input (low-pass filtered toward the target each
+## tick) specifically for the rigidly-jointed trailer case, on the theory
+## that a JERKY steering command (this policy recomputes steer fresh every
+## tick from live sensor noise) whips the towed body wide via the joint
+## more than a smooth one would, independent of overall speed.
+@export var trailer_steer_smoothing: float = 0.3
+
 ## --- Whisker sensor rig geometry (see ai/onboard_sensing.gd:whisker_scan)
 ## Kept tunable here (unlike the fixed angle fan) since range/mount
 ## height/pitch are the knobs most likely worth sweeping.
@@ -97,6 +120,9 @@ extends BTAction
 ## on linear_velocity, no curve dependency, so it carries over unchanged.
 var _stuck_timer: float = 0.0
 var _recovery_timer: float = 0.0
+## Previous tick's applied steering angle, used only for trailer_steer_smoothing's
+## low-pass filter (rigid-trailer vehicles only -- see its doc).
+var _prev_steer: float = 0.0
 
 
 func _tick(delta: float) -> int:
@@ -115,6 +141,10 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 	# this recursive scene-tree walk per call (whisker_scan x2, slope_probe,
 	# crest_ahead) was pure waste, worse for tow_truck's chain-linked trailer.
 	var exclude: Array[RID] = OnboardSensing.collect_body_rids(car)
+	# See trailer_steer_smoothing's doc: exclude.size() == 2 specifically
+	# matches trailer_truck's signature (body + one rigidly-jointed
+	# Trailer), NOT tow_truck's (7: body + 5 chain links + towed Body2).
+	var is_rigid_trailer: bool = exclude.size() == 2
 
 	var whisker_config: Dictionary = {
 		"max_range": whisker_max_range,
@@ -169,7 +199,17 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 	var right_distance: float = edge_distances[1]
 	var lateral_steer: float = deg_to_rad((right_distance - left_distance) * lateral_gain_deg_per_meter)
 
-	var steer_angle: float = clampf(heading_steer + lateral_steer, -max_steer, max_steer)
+	var raw_steer_angle: float = clampf(heading_steer + lateral_steer, -max_steer, max_steer)
+	# Low-pass filter the steering command for rigid-trailer vehicles only
+	# (see trailer_steer_smoothing's doc) -- car_base/tow_truck get the raw
+	# value unchanged (trailer_steer_smoothing >= 1.0 would be a no-op too,
+	# but gating explicitly keeps their behavior bit-identical to before
+	# this experiment, same audit-friendly pattern as the min_speed-scale
+	# attempts).
+	var steer_angle: float = raw_steer_angle
+	if is_rigid_trailer:
+		steer_angle = lerpf(_prev_steer, raw_steer_angle, trailer_steer_smoothing)
+	_prev_steer = steer_angle
 
 	# --- Recovery: if wedged (see stuck detection below), reverse out with
 	# opposite steering instead of grinding the throttle in place. Same
