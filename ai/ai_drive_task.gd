@@ -110,6 +110,11 @@ func _tick(delta: float) -> int:
 
 func _drive(car: VehicleBody3D, delta: float) -> void:
 	var space_state: PhysicsDirectSpaceState3D = car.get_world_3d().direct_space_state
+	# Computed once per tick and threaded through every sensing call below --
+	# the physics-body set under a vehicle never changes mid-race, so redoing
+	# this recursive scene-tree walk per call (whisker_scan x2, slope_probe,
+	# crest_ahead) was pure waste, worse for tow_truck's chain-linked trailer.
+	var exclude: Array[RID] = OnboardSensing.collect_body_rids(car)
 
 	var whisker_config: Dictionary = {
 		"max_range": whisker_max_range,
@@ -117,7 +122,7 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 		"height_offset": whisker_height_offset,
 		"forward_offset": whisker_forward_offset,
 	}
-	var distances: Array[float] = OnboardSensing.whisker_scan(space_state, car, whisker_config)
+	var distances: Array[float] = OnboardSensing.whisker_scan(space_state, car, whisker_config, exclude)
 	var angles_deg: Array[float] = OnboardSensing.DEFAULT_ANGLES_DEG
 
 	# --- Heading: SHORT whisker distance means the downward ray found solid
@@ -159,7 +164,7 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 		"pitch_deg": edge_probe_pitch_deg,
 		"max_range": edge_probe_max_range,
 	}
-	var edge_distances: Array[float] = OnboardSensing.whisker_scan(space_state, car, edge_config)
+	var edge_distances: Array[float] = OnboardSensing.whisker_scan(space_state, car, edge_config, exclude)
 	var left_distance: float = edge_distances[0]
 	var right_distance: float = edge_distances[1]
 	var lateral_steer: float = deg_to_rad((right_distance - left_distance) * lateral_gain_deg_per_meter)
@@ -198,7 +203,7 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 	# Slow down for steep DESCENTS (ramps), same rationale as Tier A: climbs
 	# are deliberately NOT braked for since they need momentum to crest, not
 	# less of it.
-	var slope: float = maxf(OnboardSensing.slope_probe(space_state, car), 0.0)
+	var slope: float = maxf(OnboardSensing.slope_probe(space_state, car, 6.0, exclude), 0.0)
 	if slope > slope_speed_threshold:
 		var slope_target: float = lerpf(max_speed, min_speed,
 				clampf((slope - slope_speed_threshold) * slope_braking_factor, 0.0, 1.0))
@@ -207,7 +212,7 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 	# Crest ahead (climbing then descending): cap speed hard regardless of
 	# slope steepness, since cresting too fast launches the car airborne and
 	# steering does nothing while it's in the air.
-	if OnboardSensing.crest_ahead(space_state, car, crest_preview):
+	if OnboardSensing.crest_ahead(space_state, car, crest_preview, exclude):
 		target_speed = minf(target_speed, crest_speed_cap)
 
 	# Last-resort safety net: either edge probe reading close to
