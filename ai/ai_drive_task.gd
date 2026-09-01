@@ -151,6 +151,10 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 	# matches trailer_truck's signature (body + one rigidly-jointed
 	# Trailer), NOT tow_truck's (7: body + 5 chain links + towed Body2).
 	var is_rigid_trailer: bool = exclude.size() == 2
+	# car_base (exclude.size()==1) has no trailer at all -- see
+	# yaw_rate_threshold's doc for why the yaw-rate safety net is gated to
+	# this instead of applying globally.
+	var has_any_trailer: bool = exclude.size() > 1
 
 	var whisker_config: Dictionary = {
 		"max_range": whisker_max_range,
@@ -285,8 +289,15 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 	# whisker-driven steering apparently doesn't produce Tier A's ~2 rad/s
 	# yaw rates even in normal hard turns, so a much lower threshold is
 	# both correctly calibrated and safe here.
+	# Gated to trailer-equipped vehicles only (has_any_trailer): the first
+	# version of this fix (results.tsv 965ad5f, kept) applied globally and
+	# WORKED for tow_truck/trailer_truck but regressed car_base (0.795 ->
+	# 0.374, becoming the new bottleneck) -- car_base has no trailer at
+	# all, so whatever it does at high yaw rate evidently isn't a spin-out
+	# needing this net. Testing whether excluding it recovers car_base
+	# while keeping the tow_truck/trailer_truck gains.
 	var yaw_rate: float = absf(car.angular_velocity.y)
-	if yaw_rate > yaw_rate_threshold:
+	if has_any_trailer and yaw_rate > yaw_rate_threshold:
 		target_speed = minf(target_speed, min_speed * 0.5)
 
 	# Apply throttle or brake. Mirrors the player's own low-speed torque
