@@ -23,7 +23,7 @@ une marge étroite (typiquement `tow_truck`).
 |---|---|---|---|---|---|---|---|
 | A (référence) | `autoresearch/aug31` | `279ba58` | Courbe `Path3D` exacte (privilégié — plus précis que ce qu'un humain voit à l'écran) | headless, `--repeats=3` | **0.370715** | 0.959897 | référence |
 | B (capteurs embarqués) | `autoresearch/tier-b-aug31` | `f612ae0` | Raycasts "moustaches" + frein de virage + sondes latérales de recentrage + proprioception — aucun accès à la courbe | headless, `--repeats=3` | **0.230213** (tuning suspendu, point dur identifié) | 0.433388 | oui, directement (même harnais) |
-| C Phase 1 (vision offline) | — | — | Image caméra embarquée | entraînement externe (PyTorch), métrique d'erreur de prédiction hors-ligne | N/A (pas un score de course) | — | **non** — proxy explicitement non comparable |
+| C Phase 1 (vision offline) | `autoresearch/tier-c-aug31` | `58ee972` | Image caméra embarquée (320×180, redimensionnée à 64×36) | entraînement externe (PyTorch), métrique d'erreur de prédiction hors-ligne | N/A (pas un score de course) — MAE steering 0.083 rad, MAE engine_force 11.96 | — | **non** — proxy explicitement non comparable |
 | C Phase 2 (vision closed-loop) | — | — | Image caméra embarquée | non-headless, `ai/vision/run_eval_vision.gd` (à construire) | différé | — | oui, une fois construit |
 
 ## Notes
@@ -96,10 +96,25 @@ une marge étroite (typiquement `tow_truck`).
     "tunnel bas/étroit" via la sonde verticale, ou une détection de
     contact/collision latérale plus directe) plutôt qu'un réglage de
     vitesse global.
-- **Tier C** : la Phase 1 (capture + entraînement offline) ne produit pas
-  un score directement comparable — seulement une métrique d'erreur de
-  prédiction (steering, engine_force) sur des trajectoires tenues à
-  l'écart de l'entraînement. La Phase 2 (boucle fermée réelle, but
-  d'obtenir un `aggregate_score` comparable) est délibérément différée à
-  un futur go explicite (nouvelle infra : pont d'inférence Godot↔Python,
-  eval non-headless).
+- **Tier C Phase 1** (2026-08-31) : pipeline complet validé de bout en
+  bout — capture (`ai/vision/record_dataset.gd`, caméra montée à
+  l'exécution) → 3 runs démonstrateurs Tier A (`car_base`: 82 paires,
+  gagné ; `trailer_truck`: 107 paires, gagné ; `tow_truck`: 127 paires,
+  time_up) → 316 images au total, 234 en train / 82 en val (découpage par
+  run entier, pas par frame, pour éviter la fuite entre frames
+  temporellement adjacentes) → petit CNN (28 642 paramètres,
+  `truck-town-vision-training/train.py`) entraîné 120s sur la RTX 3090.
+  **Résultat (jeu de données minimal, à but de validation du pipeline,
+  pas encore représentatif)** : MAE steering = 0.083 rad (~21% de la
+  plage `±0.4`), MAE engine_force = 11.96 (~12% de la plage `±100`).
+  Checkpoint sauvegardé (`checkpoints/vision_policy.pt`). Rappel : ceci
+  reste un proxy hors-ligne, pas un score de course — ne donne aucune
+  indication directe sur le comportement en boucle fermée. Prochaine
+  étape naturelle avant la Phase 2 : capturer davantage de runs
+  (plusieurs par véhicule, y compris des runs Tier A où le point de
+  chute varie, cf. le caveat de non-déterminisme) pour un jeu de données
+  moins minimal.
+- **Tier C Phase 2** (boucle fermée réelle, but d'obtenir un
+  `aggregate_score` comparable) est délibérément différée à un futur go
+  explicite (nouvelle infra : pont d'inférence Godot↔Python, eval
+  non-headless).
