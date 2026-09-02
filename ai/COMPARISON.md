@@ -24,7 +24,7 @@ une marge étroite (typiquement `tow_truck`).
 | A (référence) | `autoresearch/aug31` | `279ba58` | Courbe `Path3D` exacte (privilégié — plus précis que ce qu'un humain voit à l'écran) | headless, `--repeats=3` | **0.370715** | 0.959897 | référence |
 | B (capteurs embarqués) | `autoresearch/tier-b-aug31` | `f612ae0` | Raycasts "moustaches" + frein de virage + sondes latérales de recentrage + proprioception — aucun accès à la courbe | headless, `--repeats=3` | **0.230213** (tuning suspendu, point dur identifié) | 0.433388 | oui, directement (même harnais) |
 | C Phase 1 (vision offline) | `autoresearch/tier-c-aug31` | `58ee972` | Image caméra embarquée (320×180, redimensionnée à 64×36) | entraînement externe (PyTorch), métrique d'erreur de prédiction hors-ligne | N/A (pas un score de course) — Phase 1 initiale (2026-08-31, mono-expert Tier A, 316 frames / 3 runs) : MAE steering 0.083 rad, MAE engine_force 11.96. Mise à jour 2026-09-01 (974 frames / 14 runs, mix Tier A + Tier B — voir notes, **non comparable en apples-to-apples** à la ligne du dessus) : MAE steering 0.076 rad, MAE engine_force 13.60 | — | **non** — proxy explicitement non comparable |
-| C Phase 2 (vision closed-loop) | — | — | Image caméra embarquée | non-headless, `ai/vision/run_eval_vision.gd` (à construire) | différé | — | oui, une fois construit |
+| C Phase 2 (vision closed-loop) | `autoresearch/tier-c-phase2` | `81b8150` | Image caméra embarquée, boucle fermée réelle | non-headless, `ai/vision/run_eval_vision.gd`, run unique (pas de `--repeats`) | **0.124124** | 0.144328 | oui, même harnais — mais run unique, à confirmer avec `--repeats` avant de le traiter comme définitif |
 
 ## Notes
 
@@ -182,7 +182,31 @@ une marge étroite (typiquement `tow_truck`).
     apples-to-apples nécessiterait soit un dataset élargi mais
     mono-tier, soit un conditionnement explicite du modèle sur le tier
     du démonstrateur.
-- **Tier C Phase 2** (boucle fermée réelle, but d'obtenir un
-  `aggregate_score` comparable) est délibérément différée à un futur go
-  explicite (nouvelle infra : pont d'inférence Godot↔Python, eval
-  non-headless).
+- **Tier C Phase 2** (2026-09-02) : boucle fermée construite et validée —
+  pont TCP `ai/vision/vision_inference_client.gd` ↔
+  `truck-town-vision-training/infer_server.py` (charge
+  `checkpoints/vision_policy.pt`, le modèle entraîné sur le dataset mixte
+  974 frames de la note ci-dessus), politique `ai/vision/vision_drive_task.gd`
+  (BTAction comme A/B, décision toutes les 0.1s, dernière action maintenue
+  entre deux inférences), driver d'éval non-headless
+  `ai/vision/run_eval_vision.gd` (même contrat JSON que `run_eval.gd`).
+  Premier résultat réel, 3 véhicules, 65s, run unique (pas de `--repeats` —
+  coût temps réel ~65s/véhicule, contrairement à l'éval headless A/B) :
+  **`aggregate_score` = 0.124124** (`mean_score` = 0.144328), `fair=true`
+  et `ok=true` sur les 3 véhicules. Détail : `car_base` 0.1241 (45.5m),
+  `tow_truck` 0.1399 (51.3m), `trailer_truck` 0.1690 (61.9m) — tous
+  `fell_off`. Net : nettement en dessous de Tier A (0.371) et Tier B
+  (0.230–0.779 selon session), attendu pour une première politique de
+  behavior cloning pur sans itération — signature typique de l'erreur
+  cumulative (compounding error) documentée par Ross et al., *DAgger*
+  (2011) : le modèle n'a jamais vu, pendant l'entraînement, comment se
+  rattraper depuis un état légèrement décalé de la trajectoire experte,
+  donc la moindre dérive s'auto-amplifie. Prochaine étape naturelle si on
+  veut améliorer ce chiffre : itération à la DAgger (faire rouler cette
+  politique, capturer les états visités, les relabelliser avec l'action de
+  l'expert de référence — recalculable hors-ligne puisque la pose exacte
+  en simulation est connue — réinjecter dans le dataset, réentraîner)
+  plutôt qu'un changement d'architecture. **Non comparable en
+  apples-to-apples au dataset mixte Tier A+B ci-dessus** pour la partie
+  provenance du dataset — le score de Phase 2 mesure la politique
+  actuellement entraînée dessus, pas un tier de démonstrateur isolé.
