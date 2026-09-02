@@ -116,9 +116,9 @@ une marge étroite (typiquement `tow_truck`).
   moins minimal.
 - **Tier C Phase 1 — mise à jour dataset élargi (2026-09-01)** : suite à la
   note ci-dessus, un script de capture détaché a tourné en tâche de fond
-  pour ajouter 11 runs (`car_base_run3/4/5`, `trailer_truck_run2/3/4/5`,
-  `tow_truck_run2/3/4/5`) aux 4 runs déjà présents
-  (`car_base_run1/2`, `trailer_truck_run1`, `tow_truck_run1`) — 15 runs
+  pour ajouter 12 runs (`car_base_run2/3/4/5`, `trailer_truck_run2/3/4/5`,
+  `tow_truck_run2/3/4/5`) aux 3 runs déjà présents
+  (`car_base_run1`, `trailer_truck_run1`, `tow_truck_run1`) — 15 runs
   tentés, 14 indexés avec succès (`trailer_truck_run3` a planté en cours
   de capture côté Godot — `WARNING: 2 ObjectDB instances were leaked at
   exit` — sans écrire de `manifest.json` ; `prepare.py` n'indexe que les
