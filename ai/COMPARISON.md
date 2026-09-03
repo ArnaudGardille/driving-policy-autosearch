@@ -21,21 +21,35 @@ une marge étroite (typiquement `tow_truck`).
 
 | Tier | Branche | Commit | Sensing | Mode d'éval | `aggregate_score` | `mean_score` | Comparable à A ? |
 |---|---|---|---|---|---|---|---|
-| A (référence) | `autoresearch/aug31` | `279ba58` | Courbe `Path3D` exacte (privilégié — plus précis que ce qu'un humain voit à l'écran) | headless, `--repeats=3` | **0.370715** | 0.959897 | référence |
+| A (référence obsolète) | `autoresearch/aug31` | `279ba58` | Courbe `Path3D` exacte (privilégié) | headless, `--repeats=3` | ~~0.370715~~ (obsolète, voir note) | 0.959897 | — |
+| A (référence à jour, sep2) | `autoresearch/aug31` (HEAD) | `9a82a9a` | Courbe `Path3D` exacte + détection de switchback/hairpin (accumulation de courbure sur 30m) | headless, `--repeats=3` | **1.138617** | 1.220879 | référence |
 | B (capteurs embarqués, aug31) | `autoresearch/tier-b-aug31` | `f612ae0` | Raycasts "moustaches" + frein de virage + sondes latérales de recentrage + proprioception — aucun accès à la courbe | headless, `--repeats=3` | 0.230213 (tuning suspendu, point dur identifié) | 0.433388 | oui, directement (même harnais) |
-| B (capteurs embarqués, sep1) | `autoresearch/tier-b-sep1` | `b5dfcd4` | Idem + lissage de direction spécifique remorque + frein de sécurité par vitesse de lacet spécifique véhicules-à-remorque — aucun accès à la courbe | headless, `--repeats=3` | **0.779241** | 0.804731 | **oui, et dépasse A** (×2.1 par rapport à A) |
+| B (capteurs embarqués, sep1) | `autoresearch/tier-b-sep1` | `b5dfcd4` | Idem + lissage de direction spécifique remorque + frein de sécurité par vitesse de lacet spécifique véhicules-à-remorque — aucun accès à la courbe | headless, `--repeats=3` | **0.779241** | 0.804731 | non — **reste net en dessous d'A à jour** (0.68×) |
 | C Phase 1 (vision offline) | `autoresearch/tier-c-aug31` | `58ee972` | Image caméra embarquée (320×180, redimensionnée à 64×36) | entraînement externe (PyTorch), métrique d'erreur de prédiction hors-ligne | N/A (pas un score de course) — Phase 1 initiale (2026-08-31, mono-expert Tier A, 316 frames / 3 runs) : MAE steering 0.083 rad, MAE engine_force 11.96. Mise à jour 2026-09-01 (974 frames / 14 runs, mix Tier A + Tier B — voir notes, **non comparable en apples-to-apples** à la ligne du dessus) : MAE steering 0.076 rad, MAE engine_force 13.60 | — | **non** — proxy explicitement non comparable |
 | C Phase 2 (vision closed-loop) | `autoresearch/tier-c-phase2` | `81b8150` | Image caméra embarquée, boucle fermée réelle | non-headless, `ai/vision/run_eval_vision.gd`, `--repeats=3` | **0.100781** | 0.129766 | oui, même harnais |
 
 ## Notes
 
-- **Tier A** : `0.370715` est le pire des 3 répétitions sur le commit
-  `279ba58` (`ai_drive_task.gd` non modifié) — remplace le `1.160353`
-  précédemment rapporté, qui s'est révélé être un run chanceux isolé (voir
-  `results.tsv` et le caveat ci-dessus). `car_base` et `trailer_truck`
-  finissent de façon fiable (1.348, 1.161) ; `tow_truck` est le goulot
-  d'étranglement et le seul véhicule dont le score varie selon le run
-  (0.377 / 0.442 / 0.371 sur 3 répétitions).
+- **Tier A — correction importante (2026-09-02)** : la ligne "référence
+  obsolète" ci-dessus (`0.370715` sur `279ba58`) a servi de référence Tier A
+  dans toutes les comparaisons B/C de ce document jusqu'ici — **c'était une
+  erreur**. `279ba58` n'existe plus dans l'historique local (probablement un
+  commit `try:` intermédiaire rendu inaccessible par un `--amend` du
+  protocole `PROGRAM.md`), et `autoresearch/aug31` a manifestement continué
+  à être affiné après cette mesure (au moins la détection de
+  switchback/hairpin, `8f84523`, absente du commit référencé). Rejoué avec
+  `--repeats=3` sur l'état actuel de la branche (`9a82a9a`) : **`1.138617`**,
+  stable (répétitions quasi identiques par véhicule, contrairement au
+  `0.377/0.442/0.371` très dispersé de `tow_truck` sur l'ancienne mesure —
+  signe que `279ba58` était un point de tuning nettement moins abouti, pas
+  juste une histoire de chance/malchance sur un run). **Toutes les
+  comparaisons "B dépasse A" plus bas dans ce document sont donc fausses** —
+  elles comparaient B à une référence A sous-évaluée. La vraie référence A
+  est `1.138617`, et B (`0.779241`, sa meilleure mesure à ce jour) reste net
+  en dessous (0.68×). Leçon générale : sur ce projet, ne jamais citer un
+  score sans vérifier que le commit référencé est toujours atteignable et
+  représente bien le dernier état de la branche, pas seulement qu'il ait été
+  mesuré avec `--repeats=3` en son temps.
 - **Tier B** : brancher depuis `279ba58` (pas depuis un commit `try:` non
   encore évalué), pour partir d'une base connue et stable.
   **Historique de tuning** :
@@ -159,8 +173,17 @@ une marge étroite (typiquement `tow_truck`).
       `tow_truck`/`trailer_truck` gardent leurs gains complets.
   - **Score final de cette reprise** : `0.779241` (agrégat, pire de 3
     répétitions, commit `b5dfcd4`), mean `0.804731` — **×3.4 par rapport
-    au point de départ de cette reprise (0.230213), ×2.1 par rapport à la
-    référence Tier A (0.370715)**. Goulot d'étranglement restant :
+    au point de départ de cette reprise (0.230213)**. Le ×2.1 par rapport à
+    la "référence Tier A (0.370715)" cité ici (et le "déjà au-dessus de
+    Tier A" un peu plus haut) était vrai par rapport à la référence connue
+    à ce moment-là de la session, mais **cette référence s'est révélée
+    obsolète** (voir la note de correction en tête de fichier) — la vraie
+    référence Tier A à jour est `1.138617`, et B reste net en dessous
+    (0.68×). Laissé tel quel ci-dessus/ci-dessous pour préserver le
+    raisonnement réel de la session au moment où il a eu lieu (même
+    convention que `results.tsv`, jamais réécrit après coup) ; se fier à la
+    note de correction pour la conclusion actuelle. Goulot d'étranglement
+    restant :
     `tow_truck` (0.779, toujours le plus bas des 3, mais ne tombe/coince
     plus — la pire répétition observée finit `time_up` à 285-354m sur
     ~366m, donc un problème de rythme/temps plus qu'un échec dur).
@@ -295,3 +318,28 @@ une marge étroite (typiquement `tow_truck`).
   apples-to-apples au dataset mixte Tier A+B ci-dessus** pour la partie
   provenance du dataset — le score de Phase 2 mesure la politique
   actuellement entraînée dessus, pas un tier de démonstrateur isolé.
+- **Expérience (2026-09-02) : le filet de sécurité anti-lacet de Tier B
+  profite-t-il aussi à Tier A ?** Branche `experiment/tier-a-yaw-gating`
+  (non fusionnée — expérimentation ponctuelle, pas une nouvelle politique
+  candidate). Porté tel quel sur `ai_drive_task.gd` de Tier A (à jour,
+  `9a82a9a`, baseline `1.138617`) : même seuil (`yaw_rate_threshold=0.5`),
+  même déclenchement (`target_speed = min_speed*0.5`), même signal de
+  gating (`OnboardSensing.collect_body_rids(car).size()>1`, disponible
+  depuis la fusion de Tier B). Résultat, `--repeats=3` : **`aggregate_score`
+  = 1.055702** (mean 1.165011) — **régression, pas un gain** :
+  `car_base` inchangé (1.3089, pas de remorque donc jamais gaté),
+  `tow_truck` 1.2151→1.1304, `trailer_truck` 1.1386→1.0557. **Conclusion** :
+  la technique ne généralise pas — elle aide Tier B parce que Tier B n'a
+  aucun moyen de voir un virage arriver à l'avance (pas d'accès à la
+  courbe, seulement des moustaches qui ne détectent le danger qu'une fois
+  presque dedans), donc un vrai tête-à-queue peut se produire et a besoin
+  d'un filet de rattrapage. Tier A voit le virage arriver (détection de
+  courbure + switchback/hairpin dédiée) et freine en amont — le filet de
+  lacet ne se déclenche alors quasiment jamais pour une bonne raison, et
+  quand il se déclenche quand même c'est un faux positif qui coûte du
+  temps de course pour rien. Ça règle la question posée : l'écart A/B
+  n'est pas dû à l'absence de cette technique chez A, il est dû à l'écart
+  d'information lui-même (courbe exacte vs capteurs locaux) — la
+  performance de A vient de pouvoir anticiper, celle que B a gagnée vient
+  de mieux réagir après coup, et ces deux mécanismes ne sont pas
+  interchangeables.
