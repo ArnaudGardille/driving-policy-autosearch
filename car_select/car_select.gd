@@ -11,11 +11,25 @@ var audio_master: int = AudioServer.get_bus_index("Master")
 
 @onready var button_sdfgi: CheckBox = $%SDFGI
 @onready var button_race_mode: CheckBox = $%RaceMode
-@onready var button_ai_drive: CheckBox = $%AIDrive
+@onready var option_driver: OptionButton = $%DriverSelect
 @onready var button_mute: TextureButton = %Mute
 @onready var slider_volume: HSlider = %Volume
 
 @onready var loading_screen: PanelContainer = %LoadingPanel
+
+## Who can drive the selected car. Presented with player-friendly labels --
+## the underlying perception-tier comparison in ai/COMPARISON.md ("Tier
+## A/B/C") is internal research vocabulary, not something to show a player.
+## Index into this array selects both the label (built in _ready) and the
+## driver scene (null = player drives; race_manager.gd's ai_driver_scene
+## export is left at its default when unused). Tier A (privileged track
+## curve access) drives noticeably better than Tier B (sensors only) -- see
+## ai/COMPARISON.md -- so it's offered as the "expert" option.
+const _DRIVER_OPTIONS: Array[Dictionary] = [
+	{"label": "Vous-même", "scene": null},
+	{"label": "Pilote expert", "scene": "res://ai/tier_a_driver.tscn"},
+	{"label": "Pilote prudent", "scene": "res://ai/ai_driver.tscn"},
+]
 
 var _town: Node3D = null
 var _race_scene: Node3D = null
@@ -33,6 +47,13 @@ func _ready() -> void:
 
 	# Hide SDFGI button if this is using a renderer that doesn't support it.
 	button_sdfgi.visible = RenderingServer.get_current_rendering_method() == "forward_plus"
+
+	# Populate the driver picker. Default to the strongest AI option (index 1,
+	# "Pilote expert") -- matches the previous default of AI Drive being on.
+	option_driver.clear()
+	for entry: Dictionary in _DRIVER_OPTIONS:
+		option_driver.add_item(entry["label"])
+	option_driver.selected = 1
 
 
 func _process(_delta: float) -> void:
@@ -84,8 +105,11 @@ func _load_race_scene(car_scene: PackedScene) -> void:
 	_race_scene = preload("res://race/race_scene.tscn").instantiate()
 
 	get_parent().add_child(_race_scene)
-	# Pass whether the AI should drive the selected car (LimboAI autopilot).
-	_race_scene.ai_enabled = button_ai_drive.button_pressed
+	# Pass whether (and which) AI should drive the selected car.
+	var driver_scene_path: Variant = _DRIVER_OPTIONS[option_driver.selected]["scene"]
+	_race_scene.ai_enabled = driver_scene_path != null
+	if driver_scene_path != null:
+		_race_scene.ai_driver_scene = load(driver_scene_path)
 	_race_scene.start_race(car)
 
 

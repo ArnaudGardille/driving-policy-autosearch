@@ -38,6 +38,13 @@ const FINISH_LINE_MARGIN := 6.0
 ## When false, the player drives normally. There is no separate opponent car.
 @export var ai_enabled := false
 
+## Which driver scene to instantiate when ai_enabled is true. Must be a scene
+## exposing the same shape as ai/ai_driver.tscn (a Node3D with a child
+## "BTPlayer" BTPlayer). Lets the caller (car_select.gd) pick between the
+## different driving policies under ai/ (see ai/COMPARISON.md) without this
+## script needing to know about any of them by name. Set before start_race().
+@export var ai_driver_scene: PackedScene = preload("res://ai/ai_driver.tscn")
+
 ## Single objective score for one race attempt, meant to make different
 ## drivers (human or AI) directly comparable without eyeballing it:
 ##
@@ -188,7 +195,7 @@ func _setup_ai_driver() -> void:
 	# Instantiate a scene that embeds the BTPlayer so its owner is set at
 	# load time (a runtime-created BTPlayer otherwise fails to detect its
 	# scene root and won't initialize its behavior tree).
-	var driver_node: Node3D = preload("res://ai/ai_driver.tscn").instantiate()
+	var driver_node: Node3D = ai_driver_scene.instantiate()
 	driver_node.name = "AIDriver"
 	_car.add_child(driver_node)
 

@@ -181,12 +181,18 @@ layout_mode = 2
 button_pressed = true
 text = "Race Mode"
 
-[node name="AIDrive" type="CheckBox" parent="OptionsPanel/MarginContainer/HBoxContainer" unique_id=555000111]
-unique_name_in_owner = true
+[node name="Driver" type="HBoxContainer" parent="OptionsPanel/MarginContainer/HBoxContainer" unique_id=555000111]
 layout_mode = 2
-button_pressed = true
-tooltip_text = "Let the AI (LimboAI) drive your selected car instead of you"
-text = "AI Drive"
+
+[node name="Label" type="Label" parent="OptionsPanel/MarginContainer/HBoxContainer/Driver" unique_id=555000112]
+layout_mode = 2
+text = "Driver"
+
+[node name="DriverSelect" type="OptionButton" parent="OptionsPanel/MarginContainer/HBoxContainer/Driver" unique_id=555000113]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(140, 0)
+layout_mode = 2
+tooltip_text = "Choose who drives your selected car"
 
 [node name="Audio" type="HBoxContainer" parent="OptionsPanel/MarginContainer/HBoxContainer" unique_id=1143737421]
 layout_mode = 2

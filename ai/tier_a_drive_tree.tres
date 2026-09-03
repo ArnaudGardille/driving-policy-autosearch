@@ -1,0 +1,10 @@
+[gd_resource type="BehaviorTree" format=3]
+
+[ext_resource type="Script" path="res://ai/tier_a_drive_task.gd" id="1_drive"]
+
+[sub_resource type="BTAction" id="BTAction_drive"]
+script = ExtResource("1_drive")
+
+[resource]
+description = "LimboAI driver: Tier A curve-following driving policy, reads the track's Path3D curve directly from the blackboard (privileged access a human player doesn't have) plus 'car'. See ai/COMPARISON.md."
+root_task = SubResource("BTAction_drive")
