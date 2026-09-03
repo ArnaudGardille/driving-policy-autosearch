@@ -34,7 +34,12 @@ const DEFAULT_ANGLES_DEG: Array[float] = [-45.0, -25.0, -10.0, 0.0, 10.0, 25.0, 
 ## every whisker_scan()/slope_probe()/crest_ahead() call (up to 4x/tick,
 ## worse for tow_truck's chain-linked trailer) is pure waste. Left optional
 ## and self-computing when omitted so each function still works standalone.
-static func whisker_scan(space_state: PhysicsDirectSpaceState3D, car: VehicleBody3D, config: Dictionary = {}, exclude: Array[RID] = []) -> Array[float]:
+## `debug_out`, if a non-null Array is passed, gets one {origin, end, hit}
+## Dictionary appended per ray (world-space points; `hit` true = pavement
+## found, false = the ray reached max_range without a hit) -- purely for the
+## in-game sensor visualization (see ai_drive_task.gd's show_sensor_debug),
+## no effect on the returned distances or any driving/scoring behavior.
+static func whisker_scan(space_state: PhysicsDirectSpaceState3D, car: VehicleBody3D, config: Dictionary = {}, exclude: Array[RID] = [], debug_out: Array = []) -> Array[float]:
 	var angles_deg: Array = config.get("angles_deg", DEFAULT_ANGLES_DEG)
 	var forward_offset: float = config.get("forward_offset", 1.5)
 	var height_offset: float = config.get("height_offset", 1.0)
@@ -56,10 +61,17 @@ static func whisker_scan(space_state: PhysicsDirectSpaceState3D, car: VehicleBod
 		var to: Vector3 = origin + ray_dir * max_range
 		var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(origin, to, 0xFFFFFFFF, exclude)
 		var result: Dictionary = space_state.intersect_ray(query)
-		if result.is_empty():
-			distances.append(max_range)
-		else:
+		var hit: bool = not result.is_empty()
+		if hit:
 			distances.append(origin.distance_to(result.position))
+		else:
+			distances.append(max_range)
+		if debug_out != null:
+			debug_out.append({
+				"origin": origin,
+				"end": result.position if hit else to,
+				"hit": hit,
+			})
 	return distances
 
 

@@ -130,6 +130,19 @@ var _recovery_timer: float = 0.0
 ## low-pass filter (rigid-trailer vehicles only -- see its doc).
 var _prev_steer: float = 0.0
 
+## Draws this tier's whisker/edge-probe rays in the 3D world every tick, so
+## a human watching the race can see what a sensor-only (no track-curve,
+## no vision) AI is actually reacting to -- green where a ray finds
+## pavement, red where it doesn't (edge/gap). Purely cosmetic: computed from
+## debug_out data OnboardSensing.whisker_scan() already gathers while doing
+## the real sensing work below, never feeds back into steering/throttle.
+## Skipped entirely under --headless (DisplayServer "headless"): the
+## research/tuning loop (tests/run_eval.gd, PROGRAM.md) runs many short
+## headless races per hour and has no display to show this on anyway.
+@export var show_sensor_debug: bool = true
+var _debug_mesh: ImmediateMesh = null
+var _debug_mesh_instance: MeshInstance3D = null
+
 
 func _tick(delta: float) -> int:
 	var car: VehicleBody3D = _get_bb_var("car") as VehicleBody3D
@@ -162,7 +175,10 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 		"height_offset": whisker_height_offset,
 		"forward_offset": whisker_forward_offset,
 	}
-	var distances: Array[float] = OnboardSensing.whisker_scan(space_state, car, whisker_config, exclude)
+	# Only bothers collecting ray geometry (a handful of Vector3s/tick) when
+	# there's actually a debug mesh to feed it to -- see _debug_rays_enabled().
+	var whisker_debug: Array = []
+	var distances: Array[float] = OnboardSensing.whisker_scan(space_state, car, whisker_config, exclude, whisker_debug)
 	var angles_deg: Array[float] = OnboardSensing.DEFAULT_ANGLES_DEG
 
 	# --- Heading: SHORT whisker distance means the downward ray found solid
@@ -204,10 +220,14 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 		"pitch_deg": edge_probe_pitch_deg,
 		"max_range": edge_probe_max_range,
 	}
-	var edge_distances: Array[float] = OnboardSensing.whisker_scan(space_state, car, edge_config, exclude)
+	var edge_debug: Array = []
+	var edge_distances: Array[float] = OnboardSensing.whisker_scan(space_state, car, edge_config, exclude, edge_debug)
 	var left_distance: float = edge_distances[0]
 	var right_distance: float = edge_distances[1]
 	var lateral_steer: float = deg_to_rad((right_distance - left_distance) * lateral_gain_deg_per_meter)
+
+	if _debug_rays_enabled():
+		_draw_debug_rays(car, whisker_debug + edge_debug)
 
 	var raw_steer_angle: float = clampf(heading_steer + lateral_steer, -max_steer, max_steer)
 	# Low-pass filter the steering command for rigid-trailer vehicles only
@@ -331,3 +351,90 @@ func _get_bb_var(var_name: String) -> Variant:
 	if bb and bb.has_var(var_name):
 		return bb.get_var(var_name)
 	return null
+
+
+## show_sensor_debug is a per-instance tunable (so a research/tuning branch
+## could disable it), but there's no point ever drawing under --headless --
+## no display exists to show it on, and the tuning loop runs many races/hour
+## (see PROGRAM.md) where the extra RenderingServer traffic is pure waste.
+func _debug_rays_enabled() -> bool:
+	return show_sensor_debug and DisplayServer.get_name() != "headless"
+
+
+## World-space width of each drawn ray "beam". A single-pixel GL_LINES ray
+## (the first version of this) was nearly invisible from the game's chase
+## camera -- drawn as a thin flat ribbon instead, extruded sideways from
+## each ray so it reads as a solid beam from a typical above-and-behind
+## viewing angle.
+const _DEBUG_RAY_WIDTH := 0.05
+
+## Lazily creates (once) and redraws (every tick) a single reusable
+## ImmediateMesh under `car` showing this tier's whisker/edge-probe rays as
+## flat ribbons: green = pavement confirmed, red = ray reached max_range
+## without a hit (the "I can't see solid ground that way" signal the driving
+## logic above actually reacts to). top_level=true so the mesh's own
+## vertices, already computed in world space by OnboardSensing.whisker_scan(),
+## don't get double-transformed through the car's rotation.
+func _draw_debug_rays(car: VehicleBody3D, rays: Array) -> void:
+	if not is_instance_valid(_debug_mesh_instance):
+		_debug_mesh = ImmediateMesh.new()
+		var material := StandardMaterial3D.new()
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		material.vertex_color_use_as_albedo = true
+		material.no_depth_test = true
+		material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		# Most whisker origins sit low/close to the chassis (short forward
+		# offset, steep downward pitch -- see whisker_scan's doc), so from
+		# the game's above-and-behind chase camera the car body itself would
+		# otherwise hide most of each beam. no_depth_test alone only skips
+		# the depth TEST, not draw order -- routing through the transparent
+		# pass (even at full alpha) plus max render_priority is what
+		# actually guarantees this draws on top of the car mesh, the same
+		# "always visible" trick used for debug-draw overlays generally.
+		material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		material.render_priority = 100
+		_debug_mesh_instance = MeshInstance3D.new()
+		_debug_mesh_instance.name = "SensorDebugRays"
+		_debug_mesh_instance.mesh = _debug_mesh
+		_debug_mesh_instance.material_override = material
+		_debug_mesh_instance.top_level = true
+		car.add_child(_debug_mesh_instance)
+
+	_debug_mesh.clear_surfaces()
+	if rays.is_empty():
+		return
+	_debug_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for ray: Dictionary in rays:
+		var origin: Vector3 = ray["origin"]
+		var end: Vector3 = ray["end"]
+		var dir: Vector3 = (end - origin)
+		if dir.length_squared() < 0.0001:
+			continue
+		dir = dir.normalized()
+		# Extrude sideways (roughly horizontal, since every ray here pitches
+		# down from near-horizontal rather than straight down) so the ribbon
+		# has real screen-space width from the game's above-and-behind
+		# chase camera, instead of vanishing to a sub-pixel line.
+		var side: Vector3 = dir.cross(Vector3.UP)
+		if side.length_squared() < 0.0001:
+			side = Vector3.RIGHT
+		side = side.normalized() * (_DEBUG_RAY_WIDTH * 0.5)
+
+		var color: Color = Color.LIME_GREEN if ray["hit"] else Color.RED
+		var a: Vector3 = origin + side
+		var b: Vector3 = origin - side
+		var c: Vector3 = end - side
+		var d: Vector3 = end + side
+		_debug_mesh.surface_set_color(color)
+		_debug_mesh.surface_add_vertex(a)
+		_debug_mesh.surface_set_color(color)
+		_debug_mesh.surface_add_vertex(b)
+		_debug_mesh.surface_set_color(color)
+		_debug_mesh.surface_add_vertex(c)
+		_debug_mesh.surface_set_color(color)
+		_debug_mesh.surface_add_vertex(a)
+		_debug_mesh.surface_set_color(color)
+		_debug_mesh.surface_add_vertex(c)
+		_debug_mesh.surface_set_color(color)
+		_debug_mesh.surface_add_vertex(d)
+	_debug_mesh.surface_end()
