@@ -33,8 +33,11 @@ history fast (unlike the tiny per-experiment JSON blobs Tier A/B commit).
 
 ### 1. Capture (image, action) pairs from an expert demonstrator
 
-`ai/vision/record_dataset.gd` runs a full race with the Tier A (curve-based)
-policy as the deterministic expert, mounts a stable forward-facing camera
+`ai/vision/record_dataset.gd` runs a full race with whichever policy is
+currently checked into `ai/ai_drive_task.gd` (Tier A or Tier B — see
+`ai/COMPARISON.md`'s dataset notes for which runs came from which; the
+dataset is expert-agnostic and can mix demonstrators) as the deterministic
+expert, mounts a stable forward-facing camera
 on the car at runtime (the car's existing chase camera reorients every
 frame — unusable as a consistent observation for a vision model, see the
 script's own header comment for why), and records one (image, steering,

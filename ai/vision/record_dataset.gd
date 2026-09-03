@@ -1,7 +1,9 @@
 extends SceneTree
 ## Tier C Phase 1: records (camera image, action) pairs from a deterministic
-## expert demonstrator (Tier A, the curve-based ai/ai_drive_task.gd) driving
-## a full race, for OFFLINE imitation-learning training of a vision policy
+## expert demonstrator (whichever policy is currently checked into
+## ai/ai_drive_task.gd -- Tier A or Tier B, see ai/COMPARISON.md for which
+## runs came from which) driving a full race, for OFFLINE imitation-learning
+## training of a vision policy
 ## in the external truck-town-vision-training/ pipeline. See
 ## ai/vision/README.md for the full Tier C plan and the repo/non-repo split.
 ##
@@ -27,8 +29,8 @@ extends SceneTree
 ##    screenshot lines up tick-for-tick with a `trace` entry (which already
 ##    carries `steering`/`engine_force`) -- no separate action-logging
 ##    needed. AIBenchmark also takes a few OFF-cadence screenshots (fell_off,
-##    finish, debug_events -- Tier A's ai_drive_task.gd currently pushes no
-##    debug_events, so only fell_off/finish apply here); those are filtered
+##    finish, debug_events -- neither Tier A's nor Tier B's ai_drive_task.gd
+##    currently pushes debug_events, so only fell_off/finish apply here); those are filtered
 ##    out by filename pattern in _build_manifest() before pairing, so the
 ##    kept pairs stay exactly aligned with `trace`.
 ##

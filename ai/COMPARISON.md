@@ -24,7 +24,7 @@ une marge étroite (typiquement `tow_truck`).
 | A (référence) | `autoresearch/aug31` | `279ba58` | Courbe `Path3D` exacte (privilégié — plus précis que ce qu'un humain voit à l'écran) | headless, `--repeats=3` | **0.370715** | 0.959897 | référence |
 | B (capteurs embarqués, aug31) | `autoresearch/tier-b-aug31` | `f612ae0` | Raycasts "moustaches" + frein de virage + sondes latérales de recentrage + proprioception — aucun accès à la courbe | headless, `--repeats=3` | 0.230213 (tuning suspendu, point dur identifié) | 0.433388 | oui, directement (même harnais) |
 | B (capteurs embarqués, sep1) | `autoresearch/tier-b-sep1` | `b5dfcd4` | Idem + lissage de direction spécifique remorque + frein de sécurité par vitesse de lacet spécifique véhicules-à-remorque — aucun accès à la courbe | headless, `--repeats=3` | **0.779241** | 0.804731 | **oui, et dépasse A** (×2.1 par rapport à A) |
-| C Phase 1 (vision offline) | `autoresearch/tier-c-aug31` | `58ee972` | Image caméra embarquée (320×180, redimensionnée à 64×36) | entraînement externe (PyTorch), métrique d'erreur de prédiction hors-ligne | N/A (pas un score de course) — MAE steering 0.083 rad, MAE engine_force 11.96 | — | **non** — proxy explicitement non comparable |
+| C Phase 1 (vision offline) | `autoresearch/tier-c-aug31` | `58ee972` | Image caméra embarquée (320×180, redimensionnée à 64×36) | entraînement externe (PyTorch), métrique d'erreur de prédiction hors-ligne | N/A (pas un score de course) — Phase 1 initiale (2026-08-31, mono-expert Tier A, 316 frames / 3 runs) : MAE steering 0.083 rad, MAE engine_force 11.96. Mise à jour 2026-09-01 (974 frames / 14 runs, mix Tier A + Tier B — voir notes, **non comparable en apples-to-apples** à la ligne du dessus) : MAE steering 0.076 rad, MAE engine_force 13.60 | — | **non** — proxy explicitement non comparable |
 | C Phase 2 (vision closed-loop) | — | — | Image caméra embarquée | non-headless, `ai/vision/run_eval_vision.gd` (à construire) | différé | — | oui, une fois construit |
 
 ## Notes
@@ -192,6 +192,74 @@ une marge étroite (typiquement `tow_truck`).
   (plusieurs par véhicule, y compris des runs Tier A où le point de
   chute varie, cf. le caveat de non-déterminisme) pour un jeu de données
   moins minimal.
+- **Tier C Phase 1 — mise à jour dataset élargi (2026-09-01)** : suite à la
+  note ci-dessus, un script de capture détaché a tourné en tâche de fond
+  pour ajouter 12 runs (`car_base_run2/3/4/5`, `trailer_truck_run2/3/4/5`,
+  `tow_truck_run2/3/4/5`) aux 3 runs déjà présents
+  (`car_base_run1`, `trailer_truck_run1`, `tow_truck_run1`) — 15 runs
+  tentés, 14 indexés avec succès (`trailer_truck_run3` a planté en cours
+  de capture côté Godot — `WARNING: 2 ObjectDB instances were leaked at
+  exit` — sans écrire de `manifest.json` ; `prepare.py` n'indexe que les
+  répertoires avec `manifest.json` présent, donc ce run est exclu
+  automatiquement, aucune action manuelle nécessaire).
+  **Découverte importante en cours de route** : `ai/ai_drive_task.gd` sur
+  cette branche (et donc sur `master`, dont elle part) est actuellement
+  la politique **Tier B** (capteurs "moustaches"), pas la politique
+  Tier A (courbe exacte) qui avait servi à capturer le dataset Phase 1
+  initial. Autrement dit **le dataset résultant est un mélange
+  Tier A + Tier B**, pas "le même expert, plus de données" :
+  - `car_base` : `_run1` (82 paires, score 1.348 — Tier A, cohérent avec
+    le score `car_base` de la ligne Tier A du tableau) ; `_run2` à
+    `_run5` (79 paires chacun, score identique 0.795 — Tier B).
+  - `trailer_truck` : `_run1` (107 paires, score 1.161 — Tier A, gagné,
+    cohérent avec le `trailer_truck` de la ligne Tier A) ; `_run2`,
+    `_run4`, `_run5` (42 paires chacun, score identique 0.303 — Tier B,
+    cohérent avec la difficulté connue de `trailer_truck` sur ce niveau
+    documentée dans la section Tier B ci-dessus) ; `_run3` planté (voir
+    ci-dessus).
+  - `tow_truck` : `_run1` (127 paires, score 0.433 — Tier A, `time_up`) ;
+    `_run2` à `_run5` (54 paires chacun, score identique 0.218 —
+    Tier B).
+  - Les scores Tier B sont identiques d'un run à l'autre pour un même
+    véhicule (contrairement au caveat de non-déterminisme évoqué plus
+    haut pour Tier A) — la politique de capteurs n'introduit
+    apparemment pas de variance perceptible d'un run à l'autre sur ce
+    parcours, à la différence du solveur physique multi-threadé seul.
+  - **Ce mélange est gardé intentionnellement, pas filtré** : une piste
+    discutée (hors périmètre de cette mise à jour, pas implémentée ici)
+    consiste à mélanger délibérément plusieurs tiers de politique comme
+    démonstrateurs — y compris les échecs — pour obtenir de la diversité
+    de retour (`return diversity`) en vue d'une approche type
+    Decision-Transformer. Un dataset de qualité mixte est donc une
+    caractéristique voulue ici, pas du bruit à retirer avant
+    l'entraînement.
+  - **Nouveau total** : 974 images (788 train / 186 val, découpage par
+    run entier, seed=0) sur 14 runs. `TIME_BUDGET` remonté de 120s à
+    400s dans `prepare.py` (proportionnellement à ~3x plus de frames /
+    ~4.7x plus de runs, la RTX 3090 ayant largement la marge) —
+    `train.py` inchangé sinon.
+  - **Résultat** : MAE steering = 0.076 rad (contre 0.083 rad avant,
+    ~8% mieux), MAE engine_force = 13.60 (contre 11.96 avant, ~14%
+    moins bien).
+  - **Lecture honnête, sans trancher artificiellement** : ce n'est **pas**
+    une comparaison apples-to-apples avec le résultat Phase 1 initial —
+    l'ancienne baseline (0.083 / 11.96) vient d'un dataset mono-expert
+    Tier A (316 frames, 3 runs), la nouvelle vient d'un dataset
+    mixte Tier A + Tier B (974 frames, 14 runs) qui inclut
+    délibérément des démonstrations de niveau plus faible (y compris un
+    run raté). Une MAE plus mauvaise ici ne veut donc pas forcément dire
+    "plus de données a nui" — ça peut aussi vouloir dire "le dataset
+    contient maintenant des exemples volontairement plus durs/moins
+    experts". Concrètement : le MAE steering s'améliore légèrement,
+    le MAE engine_force se dégrade légèrement — résultat **mitigé /
+    peu concluant**, pas un verdict net dans un sens ou dans l'autre.
+    Pas de sur-interprétation à en tirer côté "plus de données aide" ou
+    "plus de données nuit" : les deux facteurs (volume de données,
+    mélange de tiers) ont changé en même temps, donc cette expérience
+    seule ne permet pas de les démêler. Une expérience future
+    apples-to-apples nécessiterait soit un dataset élargi mais
+    mono-tier, soit un conditionnement explicite du modèle sur le tier
+    du démonstrateur.
 - **Tier C Phase 2** (boucle fermée réelle, but d'obtenir un
   `aggregate_score` comparable) est délibérément différée à un futur go
   explicite (nouvelle infra : pont d'inférence Godot↔Python, eval
