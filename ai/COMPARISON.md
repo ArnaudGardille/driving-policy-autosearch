@@ -25,7 +25,7 @@ une marge étroite (typiquement `tow_truck`).
 | B (capteurs embarqués, aug31) | `autoresearch/tier-b-aug31` | `f612ae0` | Raycasts "moustaches" + frein de virage + sondes latérales de recentrage + proprioception — aucun accès à la courbe | headless, `--repeats=3` | 0.230213 (tuning suspendu, point dur identifié) | 0.433388 | oui, directement (même harnais) |
 | B (capteurs embarqués, sep1) | `autoresearch/tier-b-sep1` | `b5dfcd4` | Idem + lissage de direction spécifique remorque + frein de sécurité par vitesse de lacet spécifique véhicules-à-remorque — aucun accès à la courbe | headless, `--repeats=3` | **0.779241** | 0.804731 | **oui, et dépasse A** (×2.1 par rapport à A) |
 | C Phase 1 (vision offline) | `autoresearch/tier-c-aug31` | `58ee972` | Image caméra embarquée (320×180, redimensionnée à 64×36) | entraînement externe (PyTorch), métrique d'erreur de prédiction hors-ligne | N/A (pas un score de course) — Phase 1 initiale (2026-08-31, mono-expert Tier A, 316 frames / 3 runs) : MAE steering 0.083 rad, MAE engine_force 11.96. Mise à jour 2026-09-01 (974 frames / 14 runs, mix Tier A + Tier B — voir notes, **non comparable en apples-to-apples** à la ligne du dessus) : MAE steering 0.076 rad, MAE engine_force 13.60 | — | **non** — proxy explicitement non comparable |
-| C Phase 2 (vision closed-loop) | `autoresearch/tier-c-phase2` | `81b8150` | Image caméra embarquée, boucle fermée réelle | non-headless, `ai/vision/run_eval_vision.gd`, run unique (pas de `--repeats`) | **0.124124** | 0.144328 | oui, même harnais — mais run unique, à confirmer avec `--repeats` avant de le traiter comme définitif |
+| C Phase 2 (vision closed-loop) | `autoresearch/tier-c-phase2` | `81b8150` | Image caméra embarquée, boucle fermée réelle | non-headless, `ai/vision/run_eval_vision.gd`, `--repeats=3` | **0.100781** | 0.129766 | oui, même harnais |
 
 ## Notes
 
@@ -270,10 +270,17 @@ une marge étroite (typiquement `tow_truck`).
   `ai/vision/run_eval_vision.gd` (même contrat JSON que `run_eval.gd`).
   Premier résultat réel, 3 véhicules, 65s, run unique (pas de `--repeats` —
   coût temps réel ~65s/véhicule, contrairement à l'éval headless A/B) :
-  **`aggregate_score` = 0.124124** (`mean_score` = 0.144328), `fair=true`
+  `aggregate_score` = 0.124124 (`mean_score` = 0.144328), `fair=true`
   et `ok=true` sur les 3 véhicules. Détail : `car_base` 0.1241 (45.5m),
   `tow_truck` 0.1399 (51.3m), `trailer_truck` 0.1690 (61.9m) — tous
-  `fell_off`. Net : nettement en dessous de Tier A (0.371) et Tier B
+  `fell_off`. **Confirmé avec `--repeats=3`** (même code, `81b8150`) :
+  **`aggregate_score` = 0.100781** (`mean_score` = 0.129766, pire des 3
+  répétitions par véhicule) — `car_base` 0.1008 (répétitions 0.1008 /
+  0.1220 / 0.1578), `tow_truck` 0.1347 (0.1428 / 0.1347 / 0.1475),
+  `trailer_truck` 0.1538 (0.1854 / 0.2157 / 0.1538), tous `fair=true`.
+  Cohérent avec le run unique (même ordre de grandeur, pas de renversement
+  de conclusion) — c'est le chiffre à citer désormais. Net : nettement en
+  dessous de Tier A (0.371) et Tier B
   (0.230–0.779 selon session), attendu pour une première politique de
   behavior cloning pur sans itération — signature typique de l'erreur
   cumulative (compounding error) documentée par Ross et al., *DAgger*
