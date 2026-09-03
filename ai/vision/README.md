@@ -3,9 +3,10 @@
 Third leg of the perception-tier comparison documented in
 `ai/COMPARISON.md`: a driving policy that sees only a camera image, no
 `Path3D` curve (Tier A) and no whisker/proprioception sensors (Tier B).
-**Status: Phase 1 only** (data capture + offline training). Phase 2
-(closed-loop, the model actually driving the car for a real
-`aggregate_score`) is deliberately not built yet — see "Phase 2" below.
+**Status: Phase 1 + Phase 2 built.** Phase 1 is data capture + offline
+training. Phase 2 is closed-loop: the trained model actually drives the
+car in real time, for a real, directly comparable `aggregate_score` — see
+"Phase 2" below.
 
 ## Repo split (why training code isn't all in one place)
 
@@ -88,22 +89,57 @@ proxy, **not** an `aggregate_score` — record it in `ai/COMPARISON.md`
 explicitly marked as non-comparable to Tier A/B. It answers "does the
 pipeline work at all", not "how well would this drive."
 
-## Phase 2 — closed-loop (not built yet)
+## Phase 2 — closed-loop (built)
 
-For a real, comparable `aggregate_score`, a trained model has to actually
-drive the car: capture a frame every tick, run inference, apply
-`(steering, engine_force)` through the same control surface Tiers A/B use.
-No ONNX Runtime GDExtension or other Godot-side ML inference is installed
-in this project. Recommended approach (over adding a native GDExtension
-dependency): a local socket/IPC bridge — a `StreamPeerTCP` client in a new
-`ai/vision/ai_drive_task_vision.gd`, talking to a small standalone Python
-process holding the trained model on GPU. Needs a new non-headless eval
-driver too (`ai/vision/run_eval_vision.gd`, same JSON contract as
-`tests/run_eval.gd` but necessarily non-headless, since real pixels are
-needed every tick — it still calls the frozen `AIBenchmark.run()` /
-`compute_score()` underneath, so the "judge can't grade its own homework"
-guarantee holds). **Explicitly deferred** — see `ai/COMPARISON.md` and
-`PROGRAM.md`/plan history for the reasoning: this is new infra (sockets, a
-long-running Python server, a slower non-headless eval mode) with real
-open questions (inference latency budget, protocol) that deserves review
-of the Phase 1 results before committing to it.
+The trained model drives the car in real time: capture a frame, run
+inference, apply `(steering, engine_force)` through the same control
+surface Tiers A/B use, every `decision_interval_s` seconds (default 0.1s,
+holding the last action in between — see `vision_drive_task.gd`'s own doc
+comment for why). No ONNX Runtime GDExtension or other Godot-side ML
+inference was added — as planned, a local TCP bridge instead:
+
+- **`../truck-town-vision-training/infer_server.py`** (external, not
+  tracked here): loads `checkpoints/vision_policy.pt`, listens on a local
+  socket, and serves `(image) -> (steer, engine_force)` predictions. Must
+  already be running (`uv run infer_server.py`) before a Phase 2 eval is
+  invoked. Resizes incoming frames with PIL to match `prepare.py`'s
+  training preprocessing exactly (train/inference parity), rather than
+  trusting Godot's own, different, resize algorithm.
+- **`ai/vision/vision_inference_client.gd`** — `StreamPeerTCP` wrapper,
+  the Godot side of that bridge. Fixed binary framing (no JSON), one
+  persistent connection reused for the whole race.
+- **`ai/vision/vision_drive_task.gd`** — the actual driving policy, a
+  `BTAction` like Tiers A/B, mounted via `ai/vision/vision_driver.tscn` +
+  `vision_drive_tree.tres`. Reads only `"car"` from the blackboard — no
+  curve, no onboard sensors, only the camera. Mounts the same stable
+  forward-facing camera `record_dataset.gd` used for capture (same
+  position/rotation/FOV constants, duplicated with a comment explaining
+  why — see the file), so the live view matches the training
+  distribution.
+- **`ai/vision/run_eval_vision.gd`** — non-headless eval driver, same JSON
+  contract as `tests/run_eval.gd` (`per_vehicle`, `mean_score`,
+  `aggregate_score`, `fair`/`ok`). One thing the original plan got wrong:
+  it can't just call the frozen `AIBenchmark.run()` underneath, because
+  that helper always attaches whichever policy is currently checked into
+  `ai/ai_drive_task.gd` via `race_manager.gd`'s `_setup_ai_driver()`, with
+  no hook to substitute a different driver. Instead this script lets
+  `start_race()` attach the default driver as usual, then immediately
+  swaps it for `vision_driver.tscn` (the same "reach into `race_scene`'s
+  fields from allowed `ai/` tooling" trick `record_dataset.gd` already
+  uses to add its own camera), and runs its own scoring/fairness tick
+  loop — a close copy of `AIBenchmark.run()`'s, so the numbers stay
+  directly comparable.
+
+**Cost**: unlike headless A/B eval (~12 runs/hour), this cannot run faster
+than real time — every decision needs an actually-rendered frame. A 65s
+race takes ~65s wall-clock, plus per-vehicle startup overhead. Budget
+accordingly; this is not a fast iteration loop.
+
+**Known Phase 1 limitation carried into Phase 2**: the training dataset
+never captured brake actions (only `steering`/`engine_force`), so the
+model has no brake output — `vision_drive_task.gd` always sets
+`car.brake = 0.0`. Also no stuck/recovery logic yet, unlike Tiers A/B —
+this is the first working closed-loop version, scoped to proving the
+pipeline works, not yet feature-matched with the sensor tiers.
+
+Results are in `ai/COMPARISON.md`.
