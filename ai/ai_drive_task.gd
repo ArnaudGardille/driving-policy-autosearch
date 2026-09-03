@@ -23,6 +23,29 @@ extends BTAction
 ## Maximum target speed.
 @export var max_speed: float = 25.0
 
+## --- Trailer-aware steering smoothing: OnboardSensing.collect_body_rids(car)
+## already walks the car's own scene root every tick to build the whisker
+## raycast exclude list; its SIZE, for free, tells us the shape of this
+## vehicle's attached bodies -- car_base has exactly 1 PhysicsBody3D under
+## its root, trailer_truck has 2 (body + one rigidly-jointed Trailer),
+## tow_truck has 7 (body + 5 chain links + towed Body2). This is
+## introspection of the AI's OWN vehicle structure, not the track curve or
+## race_manager state, and not hidden from a human, who obviously knows by
+## looking whether they're towing a trailer.
+## Screenshot diagnosis (runs/diag_trailer_capture/) showed trailer_truck's
+## failure at the HugeTire tunnel/hairpin (ai/COMPARISON.md) is a Y FALL,
+## consistent with the towed Trailer body swinging wide on the hairpin.
+## Slowing trailer_truck down (min_speed floor scale) helped in its best
+## run but stayed high-variance across 3 tried scales (results.tsv
+## 1c3bcc7/e1cc363/afa09d0) -- the worst case barely moved, suggesting raw
+## speed isn't the dominant factor. Trying a different angle instead:
+## SMOOTHING steering input (low-pass filtered toward the target each
+## tick) specifically for the rigidly-jointed trailer case, on the theory
+## that a JERKY steering command (this policy recomputes steer fresh every
+## tick from live sensor noise) whips the towed body wide via the joint
+## more than a smooth one would, independent of overall speed.
+@export var trailer_steer_smoothing: float = 0.3
+
 ## --- Whisker sensor rig geometry (see ai/onboard_sensing.gd:whisker_scan)
 ## Kept tunable here (unlike the fixed angle fan) since range/mount
 ## height/pitch are the knobs most likely worth sweeping.
@@ -62,6 +85,12 @@ extends BTAction
 ## edge" and brake hard regardless of heading -- same role as Tier A's
 ## safety_margin.
 @export var edge_safety_margin: float = 3.0
+## Angular velocity around the car's up axis (rad/s) above which the car is
+## treated as turning/rotating fast enough to brake toward min_speed*0.5 and
+## help regain control. See the yaw-rate safety net's inline doc (in
+## _drive()) for the screenshot diagnosis that motivated this and why 0.5
+## (empirically swept, not Tier A's 1.2) is the calibrated value here.
+@export var yaw_rate_threshold: float = 0.5
 ## Below this fraction of the maximum possible whisker confirmation-weight
 ## sum (see heading_steer's weight_sum -- every forward whisker confirming
 ## pavement at distance 0 would be 1.0), start braking proportionally.
@@ -97,6 +126,9 @@ extends BTAction
 ## on linear_velocity, no curve dependency, so it carries over unchanged.
 var _stuck_timer: float = 0.0
 var _recovery_timer: float = 0.0
+## Previous tick's applied steering angle, used only for trailer_steer_smoothing's
+## low-pass filter (rigid-trailer vehicles only -- see its doc).
+var _prev_steer: float = 0.0
 
 
 func _tick(delta: float) -> int:
@@ -115,6 +147,14 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 	# this recursive scene-tree walk per call (whisker_scan x2, slope_probe,
 	# crest_ahead) was pure waste, worse for tow_truck's chain-linked trailer.
 	var exclude: Array[RID] = OnboardSensing.collect_body_rids(car)
+	# See trailer_steer_smoothing's doc: exclude.size() == 2 specifically
+	# matches trailer_truck's signature (body + one rigidly-jointed
+	# Trailer), NOT tow_truck's (7: body + 5 chain links + towed Body2).
+	var is_rigid_trailer: bool = exclude.size() == 2
+	# car_base (exclude.size()==1) has no trailer at all -- see
+	# yaw_rate_threshold's doc for why the yaw-rate safety net is gated to
+	# this instead of applying globally.
+	var has_any_trailer: bool = exclude.size() > 1
 
 	var whisker_config: Dictionary = {
 		"max_range": whisker_max_range,
@@ -169,7 +209,17 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 	var right_distance: float = edge_distances[1]
 	var lateral_steer: float = deg_to_rad((right_distance - left_distance) * lateral_gain_deg_per_meter)
 
-	var steer_angle: float = clampf(heading_steer + lateral_steer, -max_steer, max_steer)
+	var raw_steer_angle: float = clampf(heading_steer + lateral_steer, -max_steer, max_steer)
+	# Low-pass filter the steering command for rigid-trailer vehicles only
+	# (see trailer_steer_smoothing's doc) -- car_base/tow_truck get the raw
+	# value unchanged (trailer_steer_smoothing >= 1.0 would be a no-op too,
+	# but gating explicitly keeps their behavior bit-identical to before
+	# this experiment, same audit-friendly pattern as the min_speed-scale
+	# attempts).
+	var steer_angle: float = raw_steer_angle
+	if is_rigid_trailer:
+		steer_angle = lerpf(_prev_steer, raw_steer_angle, trailer_steer_smoothing)
+	_prev_steer = steer_angle
 
 	# --- Recovery: if wedged (see stuck detection below), reverse out with
 	# opposite steering instead of grinding the throttle in place. Same
@@ -223,6 +273,32 @@ func _drive(car: VehicleBody3D, delta: float) -> void:
 	# probes since this tier has no curve).
 	if maxf(left_distance, right_distance) > edge_probe_max_range - edge_safety_margin:
 		target_speed = minf(target_speed, min_speed)
+
+	# Yaw-rate safety net: brake hard if the car is turning/rotating fast
+	# (spinning, not just cornering). Screenshot diagnosis
+	# (runs/diag_tow_capture/012_t24s.png) showed tow_truck rotated ~90
+	# degrees sideways, wedged across the narrow bridge approaching the
+	# HugeTire tunnel -- a spin-out, a different failure mode from the
+	# forward wedge every other fix targeted (results.tsv 786fc0a onward),
+	# which is why none of them helped. Tier A tried a yaw-rate net before
+	# (threshold 1.2 rad/s) and reverted it as miscalibrated for THAT
+	# tier's curve-following policy -- ordinary hard cornering there
+	# already produced ~2 rad/s. Empirically swept for this tier instead of
+	# assuming the same number applies (0.5-3.0 tried, see results.tsv):
+	# 0.5 rad/s is where it actually engages usefully here -- this tier's
+	# whisker-driven steering apparently doesn't produce Tier A's ~2 rad/s
+	# yaw rates even in normal hard turns, so a much lower threshold is
+	# both correctly calibrated and safe here.
+	# Gated to trailer-equipped vehicles only (has_any_trailer): the first
+	# version of this fix (results.tsv 965ad5f, kept) applied globally and
+	# WORKED for tow_truck/trailer_truck but regressed car_base (0.795 ->
+	# 0.374, becoming the new bottleneck) -- car_base has no trailer at
+	# all, so whatever it does at high yaw rate evidently isn't a spin-out
+	# needing this net. Testing whether excluding it recovers car_base
+	# while keeping the tow_truck/trailer_truck gains.
+	var yaw_rate: float = absf(car.angular_velocity.y)
+	if has_any_trailer and yaw_rate > yaw_rate_threshold:
+		target_speed = minf(target_speed, min_speed * 0.5)
 
 	# Apply throttle or brake. Mirrors the player's own low-speed torque
 	# boost (vehicle.gd) so the AI's acceleration curve matches the human's
