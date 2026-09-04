@@ -142,4 +142,37 @@ model has no brake output — `vision_drive_task.gd` always sets
 this is the first working closed-loop version, scoped to proving the
 pipeline works, not yet feature-matched with the sensor tiers.
 
+## DAgger iteration (built)
+
+`ai/vision/dagger_collect.gd` closes the loop Phase 2 leaves open: it runs
+the CURRENT closed-loop policy for real (same driver-swap as
+`run_eval_vision.gd`) and, at each capture instant, relabels the state the
+policy actually visited with what the Tier A expert (`ai/tier_a_drive_task.gd`)
+would have done from that exact pose -- no second race needed, since
+`_drive(car, path, delta)` is a near-pure function of the car's current
+transform, callable directly (steering/engine_force/brake saved and
+restored around the call so the real drive is never disturbed). Only
+captures states within `TRACK_WIDTH` of the track centerline -- states the
+car visits once already well off-track produce unreliable expert opinions
+(Tier A's own bounded localization search isn't designed to reason about
+that regime). Same non-headless requirement and cost profile as
+`record_dataset.gd`/`run_eval_vision.gd`.
+
+```
+godot --display-driver x11 --rendering-driver vulkan --resolution 320x180 \
+    --path <repo> --script res://ai/vision/dagger_collect.gd -- \
+    --vehicle=car_base --dir=/abs/path/to/data/dagger_rN_car_base \
+    [--seconds=65] [--host=127.0.0.1] [--port=8765] [--decision_interval=0.1]
+```
+
+Loop: collect (all 3 vehicles) with `infer_server.py` serving the current
+checkpoint -> merge the new run directories into `data/` -> `uv run train.py`
+-> re-serve the new checkpoint -> `run_eval_vision.gd` to score it -> repeat
+with the new checkpoint as the next round's demonstrator. `train.py` now
+fixes a random seed (see its own comment) specifically so this comparison
+is meaningful round to round -- without it, training-init variance alone
+swings the closed-loop score by as much as a real dataset change does.
+Results, the two bugs found along the way, and the final numbers are in
+`ai/COMPARISON.md`.
+
 Results are in `ai/COMPARISON.md`.

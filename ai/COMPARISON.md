@@ -27,6 +27,7 @@ une marge étroite (typiquement `tow_truck`).
 | B (capteurs embarqués, sep1) | `autoresearch/tier-b-sep1` | `b5dfcd4` | Idem + lissage de direction spécifique remorque + frein de sécurité par vitesse de lacet spécifique véhicules-à-remorque — aucun accès à la courbe | headless, `--repeats=3` | **0.779241** | 0.804731 | non — **reste net en dessous d'A à jour** (0.68×) |
 | C Phase 1 (vision offline) | `autoresearch/tier-c-aug31` | `58ee972` | Image caméra embarquée (320×180, redimensionnée à 64×36) | entraînement externe (PyTorch), métrique d'erreur de prédiction hors-ligne | N/A (pas un score de course) — Phase 1 initiale (2026-08-31, mono-expert Tier A, 316 frames / 3 runs) : MAE steering 0.083 rad, MAE engine_force 11.96. Mise à jour 2026-09-01 (974 frames / 14 runs, mix Tier A + Tier B — voir notes, **non comparable en apples-to-apples** à la ligne du dessus) : MAE steering 0.076 rad, MAE engine_force 13.60 | — | **non** — proxy explicitement non comparable |
 | C Phase 2 (vision closed-loop) | `autoresearch/tier-c-phase2` | `81b8150` | Image caméra embarquée, boucle fermée réelle | non-headless, `ai/vision/run_eval_vision.gd`, `--repeats=3` | **0.100781** | 0.129766 | oui, même harnais |
+| C Phase 2 — itération DAgger (sep4) | `feature/tierc-dagger-sep4` | (voir notes) | Idem, dataset enrichi par 4 rounds DAgger (états réellement visités par la politique, relabellisés par l'expert Tier A) | non-headless, `ai/vision/run_eval_vision.gd`, `--repeats=3` | **0.102386** | 0.102789 | oui, même harnais |
 
 ## Notes
 
@@ -318,6 +319,85 @@ une marge étroite (typiquement `tow_truck`).
   apples-to-apples au dataset mixte Tier A+B ci-dessus** pour la partie
   provenance du dataset — le score de Phase 2 mesure la politique
   actuellement entraînée dessus, pas un tier de démonstrateur isolé.
+- **Tier C — itération DAgger (2026-09-04, `feature/tierc-dagger-sep4`)** :
+  suite directe de la note ci-dessus — implémentation de l'itération DAgger
+  qui y était identifiée comme prochaine étape naturelle. Nouveau script
+  `ai/vision/dagger_collect.gd` : fait rouler la politique vision actuelle
+  en boucle fermée réelle (comme `run_eval_vision.gd`) et, à chaque instant
+  de capture, relabellise l'état réellement visité avec l'action que
+  l'expert Tier A (`ai/tier_a_drive_task.gd`) aurait prise à cette pose
+  exacte — sans seconde course réelle : `_drive(car, path, delta)` est une
+  fonction quasi-pure de la transform courante de la voiture, appelable
+  directement sur la voiture pilotée par Tier C (valeurs
+  steering/engine_force/brake sauvegardées puis restaurées immédiatement
+  après la requête, donc la conduite réelle n'est jamais perturbée).
+  **Deux bugs trouvés et corrigés en cours de route, tous deux instructifs :**
+  1. **Relabellisation d'états hors-piste** : la toute première tentative
+     relabellisait aussi les derniers instants de chaque trajectoire (voiture
+     déjà hors piste ou en chute), où la recherche de localisation bornée de
+     `_localize()` (voir son propre commentaire) décroche et produit des
+     corrections incohérentes (ex. `+0.28` suivi de `-0.39` l'instant
+     d'après). Corrigé en ne capturant que les états où la distance au point
+     le plus proche de la courbe reste ≤ `TRACK_WIDTH`.
+  2. **Variance d'entraînement masquant l'effet des données** : `train.py`
+     n'avait pas de seed fixée. Comparer un premier round DAgger (corrigé)
+     à l'ancien score documenté (0.100781) donnait une régression nette
+     (~0.061, voiture tombant à ~22m au lieu de 45-90m) — mais réentraîner
+     sur le dataset **original seul**, sans aucun ajout DAgger, donnait
+     *aussi* un score dégradé (0.093) simplement à cause d'une nouvelle
+     init aléatoire. La variance d'initialisation à elle seule (0.059 à
+     0.124 selon le seed, sur le **même** dataset) dépassait l'effet
+     attendu d'un round DAgger de ~40 frames sur un dataset de ~1000. Une
+     première tentative de correctif — ne garder que le checkpoint avec la
+     meilleure MAE de validation hors-ligne au lieu du dernier pas — a
+     *aggravé* les choses (0.059, la pire mesure de toute cette
+     investigation) : confirmation empirique directe que la MAE hors-ligne
+     ne prédit pas la performance en boucle fermée (déjà signalé comme mise
+     en garde dans `ai/vision/README.md`). Revenu à un simple `seed=0` fixe
+     avec sauvegarde du dernier pas — ainsi deux runs sur le même dataset
+     produisent les mêmes poids, et seul un vrai changement de dataset peut
+     faire bouger le score entre comparaisons.
+  **Progression (seed=0 fixe à chaque round, réentraînement complet sur
+  baseline + rounds cumulés, `--repeats=1` pour le signal rapide) :**
+  - Round 0 (974 frames, sans DAgger) : `aggregate_score` = 0.0590
+    (`car_base`/`tow_truck`/`trailer_truck` tombent tous à ~22m).
+  - Round 1 (+40 frames, 3 véhicules) : **0.0946** (+60 % — voitures à
+    35-41m).
+  - Round 2 (+30 frames) : 0.0961 (+1.6 % — quasi plateau, mais
+    `tow_truck` finit `time_up` pour la première fois, 52m).
+  - Round 3 (+37 frames) : **0.1014** (+5.5 % — les 3 véhicules se
+    resserrent nettement, 37-38m chacun).
+  - Round 4 (+33 frames) : 0.1000 (-1.4 %, plateau confirmé sur 3 rounds
+    consécutifs — `trailer_truck` progresse fort (77m, `time_up`) mais
+    `car_base`/`tow_truck` deviennent le nouveau goulot d'étranglement,
+    ~37m chacun).
+  **Arrêt sur plateau** (critère fixé à l'avance : <10 % de gain relatif
+  sur 2 rounds consécutifs, observé sur 3) — checkpoint du round 3 gardé
+  comme champion (meilleur agrégat, répartition la plus homogène entre
+  véhicules). **Confirmé avec `--repeats=3`** : **`aggregate_score` =
+  0.102386** (`mean_score` = 0.102789) — `car_base` 0.1032 (0.1032/0.1033/
+  0.1034, 37.8-37.9m), `tow_truck` 0.1024 (0.1042/0.1024/0.1063,
+  37.5-39.0m), `trailer_truck` 0.1028 (0.1028/0.1049/0.1051, 37.7-38.5m),
+  tous `fair=true`. Remarquablement stable d'une répétition à l'autre par
+  rapport à la dispersion observée sur le score Phase 2 d'origine (ex.
+  `car_base` 0.1008/0.1220/0.1578) — signe d'une politique plus robuste,
+  pas seulement d'un score ponctuel chanceux.
+  **Bilan honnête** : +73 % par rapport au point de départ contrôlé par
+  seed (0.059 → 0.102), et légèrement au-dessus du score Phase 2 original
+  cité en tête de cette note (0.100781) sous le même protocole rigoureux
+  (`--repeats=3`) — un gain net mais modeste en valeur absolue, largement
+  éclipsé par Tier A (1.14) et Tier B (0.78). La voiture continue de
+  systématiquement finir `fell_off` à ~38m sur les ~366m de piste : la
+  boucle DAgger a clairement réduit l'erreur cumulative des tout premiers
+  instants (elle ne tombe plus après ~6-10s comme la politique Phase 1)
+  mais un déficit de compétence plus profond subsiste au-delà de ce point.
+  Poursuivre demanderait probablement plus que d'autres rounds DAgger à
+  cette échelle : le dataset (~1080 frames) et le modèle (28k paramètres,
+  3 convolutions) sont tous deux minuscules, et un round DAgger n'y ajoute
+  qu'environ 30-40 frames (~3-4 % du dataset) — la piste la plus probable
+  pour une prochaine reprise est d'augmenter la capacité du modèle et/ou
+  le volume de données par round, pas de relancer la même boucle telle
+  quelle.
 - **Expérience (2026-09-02) : le filet de sécurité anti-lacet de Tier B
   profite-t-il aussi à Tier A ?** Branche `experiment/tier-a-yaw-gating`
   (non fusionnée — expérimentation ponctuelle, pas une nouvelle politique
