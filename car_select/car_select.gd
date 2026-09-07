@@ -11,6 +11,7 @@ var audio_master: int = AudioServer.get_bus_index("Master")
 
 @onready var button_sdfgi: CheckBox = $%SDFGI
 @onready var button_race_mode: CheckBox = $%RaceMode
+@onready var button_random_track: CheckBox = $%RandomTrack
 @onready var option_driver: OptionButton = $%DriverSelect
 @onready var button_mute: TextureButton = %Mute
 @onready var slider_volume: HSlider = %Volume
@@ -110,6 +111,7 @@ func _load_race_scene(car_scene: PackedScene) -> void:
 	_race_scene.ai_enabled = driver_scene_path != null
 	if driver_scene_path != null:
 		_race_scene.ai_driver_scene = load(driver_scene_path)
+	_race_scene.randomize_track = button_random_track.button_pressed
 	_race_scene.start_race(car)
 
 
