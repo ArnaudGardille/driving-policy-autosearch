@@ -17,7 +17,7 @@ const MAX_PITCH_RAD := deg_to_rad(8.0)
 ## overlap itself -- rejected, since RaceManager's distance tracking
 ## (Curve3D.get_closest_offset) assumes a single unambiguous closest point.
 const MIN_CLEARANCE := 10.0
-## Give up refining after this many seeded attempts and return the last one.
+## Fall back to a straight track if no candidate passes this many attempts.
 const MAX_ATTEMPTS := 30
 
 
@@ -32,6 +32,11 @@ static func generate_valid_curve(num_points: int, seed_value: int) -> Curve3D:
 		curve = _generate_curve(num_points, rng)
 		if _is_valid(curve):
 			return curve
+	# Never return a rejected candidate. A straight route always has clearance.
+	curve = Curve3D.new()
+	for i in maxi(num_points, 2):
+		curve.add_point(Vector3(0, 0, i * SEGMENT_LENGTH))
+	_smooth_handles(curve)
 	return curve
 
 
@@ -64,27 +69,17 @@ static func _smooth_handles(curve: Curve3D) -> void:
 
 
 static func _is_valid(curve: Curve3D) -> bool:
-	var n := curve.point_count
-	for i in n - 1:
-		var a1: Vector3 = curve.get_point_position(i)
-		var a2: Vector3 = curve.get_point_position(i + 1)
-		for j in range(i + 2, n - 1):
-			var b1: Vector3 = curve.get_point_position(j)
-			var b2: Vector3 = curve.get_point_position(j + 1)
-			if _segment_distance(a1, a2, b1, b2) < MIN_CLEARANCE:
+	# Check the actual smoothed route, excluding nearby points along the road.
+	var points := curve.get_baked_points()
+	var offsets := PackedFloat32Array([0.0])
+	for i in range(1, points.size()):
+		offsets.append(offsets[-1] + points[i - 1].distance_to(points[i]))
+	for i in range(points.size() - 1):
+		for j in range(i + 2, points.size() - 1):
+			if offsets[j] - offsets[i + 1] < MIN_CLEARANCE * 2.0:
+				continue
+			var closest := Geometry3D.get_closest_points_between_segments(
+					points[i], points[i + 1], points[j], points[j + 1])
+			if closest[0].distance_to(closest[1]) < MIN_CLEARANCE:
 				return false
-	return true
-
-
-## Closest distance between two 3D segments, sampled (cheap and accurate
-## enough at MIN_CLEARANCE / SEGMENT_LENGTH scale -- no need for an exact
-## closed-form segment-segment distance here).
-static func _segment_distance(p1: Vector3, p2: Vector3, p3: Vector3, p4: Vector3) -> float:
-	const SAMPLES := 4
-	var closest := INF
-	for i in SAMPLES + 1:
-		var a: Vector3 = p1.lerp(p2, float(i) / SAMPLES)
-		for j in SAMPLES + 1:
-			var b: Vector3 = p3.lerp(p4, float(j) / SAMPLES)
-			closest = minf(closest, a.distance_to(b))
-	return closest
+	return points.size() >= 2

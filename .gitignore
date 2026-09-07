@@ -5,5 +5,14 @@
 
 # OS
 .DS_Store
-results.tsv
-run.log
+*.log
+
+# Exploratory capture_run.gd screenshots (tests/capture_run.gd): gitignored
+# by default so they stay out of `git status` -- an uncommitted PNG here
+# would otherwise trip tools/check_allowlist.sh on the next candidate's
+# commit (it flags anything outside ai/, tracked or not). To keep a
+# genuinely instructive set permanently, `git add -f` it explicitly and
+# commit alongside that experiment's log commit, same as runs/<hash>.json.
+runs/**/*.png
+runs/**/manifest.json
+addons/ziva_agent/

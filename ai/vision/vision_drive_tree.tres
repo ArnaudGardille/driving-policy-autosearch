@@ -1,0 +1,10 @@
+[gd_resource type="BehaviorTree" format=3]
+
+[ext_resource type="Script" path="res://ai/vision/vision_drive_task.gd" id="1_drive"]
+
+[sub_resource type="BTAction" id="BTAction_vision_drive"]
+script = ExtResource("1_drive")
+
+[resource]
+description = "LimboAI driver: Tier C Phase 2 VisionDriveTask, drives from a real-time camera-image query to the external inference server only. Reads 'car' from the blackboard ('path' is set by race_manager.gd but deliberately never read -- see ai/README_RESEARCH.md and ai/vision/README.md)."
+root_task = SubResource("BTAction_vision_drive")

@@ -49,6 +49,13 @@ const _TRACK_POINT_COUNT := 40
 ## random seed each race.
 @export var track_seed := -1
 
+## Which driver scene to instantiate when ai_enabled is true. Must be a scene
+## exposing the same shape as ai/ai_driver.tscn (a Node3D with a child
+## "BTPlayer" BTPlayer). Lets the caller (car_select.gd) pick between the
+## different driving policies under ai/ (see ai/COMPARISON.md) without this
+## script needing to know about any of them by name. Set before start_race().
+@export var ai_driver_scene: PackedScene = preload("res://ai/ai_driver.tscn")
+
 ## Single objective score for one race attempt, meant to make different
 ## drivers (human or AI) directly comparable without eyeballing it:
 ##
@@ -81,6 +88,7 @@ var _path: Path3D
 var _last_offset: float = 0.0
 var _total_distance: float = 0.0
 var _off_track_timer: float = 0.0
+var _record_suffix := ""
 var _best_distance: float = 0.0
 var _best_time: float = INF
 var _best_score: float = 0.0
@@ -100,9 +108,6 @@ func _ready() -> void:
 	_path = _racetrack.get_node("Path3D") as Path3D
 	# Curve3D auto-bakes on first call to sample_baked() or get_baked_length().
 	_track_length = _path.curve.get_baked_length()
-	_best_distance = _load_best_distance()
-	_best_time = _load_best_time()
-	_best_score = _load_best_score()
 	if _race_ui:
 		_race_ui.setup(self)
 	_compute_fall_kill_y()
@@ -122,22 +127,14 @@ func _compute_fall_kill_y() -> void:
 	_fall_kill_y = lowest - FALL_MARGIN
 
 
-## Replaces the hand-authored track curve with a procedurally generated one.
-## Mutates the existing Curve3D in place (rather than assigning a new
-## resource to _path.curve) so the CSGPolygon3D extruding it -- already
-## watching this exact curve instance for changes -- picks up the new
-## shape the same way it would live edits in the editor.
+## Install a private curve so later fixed-track races retain their authored route.
 func _generate_random_track() -> void:
 	var actual_seed := track_seed if track_seed >= 0 else randi()
 	print("RaceManager: generating track with seed %d" % actual_seed)
 
 	var generated := TrackGenerator.generate_valid_curve(_TRACK_POINT_COUNT, actual_seed)
-	_path.curve.clear_points()
-	for i in generated.point_count:
-		_path.curve.add_point(
-				generated.get_point_position(i),
-				generated.get_point_in(i),
-				generated.get_point_out(i))
+	_path.curve = generated
+	_record_suffix = "_random_v1_%d" % actual_seed
 
 	_track_length = _path.curve.get_baked_length()
 	_compute_fall_kill_y()
@@ -173,7 +170,9 @@ func _resize_collision_floor() -> void:
 	const MARGIN := 40.0
 	var center := aabb.get_center()
 	_collision_floor.global_position = Vector3(center.x, aabb.position.y - 15.0, center.z)
-	var shape := _collision_floor.get_node("CollisionShape3D").shape as BoxShape3D
+	var collision := _collision_floor.get_node("CollisionShape3D") as CollisionShape3D
+	var shape := collision.shape.duplicate() as BoxShape3D
+	collision.shape = shape
 	shape.size = Vector3(aabb.size.x + MARGIN * 2.0, 1.0, aabb.size.z + MARGIN * 2.0)
 
 
@@ -200,6 +199,9 @@ func _find_surface_y(point: Vector3) -> float:
 func start_race(car_node: Node3D) -> void:
 	if randomize_track:
 		_generate_random_track()
+	_best_distance = _load_best_distance()
+	_best_time = _load_best_time()
+	_best_score = _load_best_score()
 
 	# The racetrack's CSG collision shape is generated procedurally and may
 	# not be registered with the physics server yet on the very same frame
@@ -258,7 +260,7 @@ func _setup_ai_driver() -> void:
 	# Instantiate a scene that embeds the BTPlayer so its owner is set at
 	# load time (a runtime-created BTPlayer otherwise fails to detect its
 	# scene root and won't initialize its behavior tree).
-	var driver_node: Node3D = preload("res://ai/ai_driver.tscn").instantiate()
+	var driver_node: Node3D = ai_driver_scene.instantiate()
 	driver_node.name = "AIDriver"
 	_car.add_child(driver_node)
 
@@ -437,7 +439,7 @@ func _set_car_controls_enabled(enabled: bool) -> void:
 
 
 func _load_best_distance() -> float:
-	var file := FileAccess.open("user://race_best.save", FileAccess.READ)
+	var file := FileAccess.open(("user://race_best%s.save" % _record_suffix), FileAccess.READ)
 	if file:
 		var value: float = file.get_float()
 		file.close()
@@ -446,14 +448,14 @@ func _load_best_distance() -> float:
 
 
 func _save_best_distance() -> void:
-	var file := FileAccess.open("user://race_best.save", FileAccess.WRITE)
+	var file := FileAccess.open(("user://race_best%s.save" % _record_suffix), FileAccess.WRITE)
 	if file:
 		file.store_float(_best_distance)
 		file.close()
 
 
 func _load_best_time() -> float:
-	var file := FileAccess.open("user://race_best_time.save", FileAccess.READ)
+	var file := FileAccess.open(("user://race_best_time%s.save" % _record_suffix), FileAccess.READ)
 	if file:
 		var value: float = file.get_float()
 		file.close()
@@ -462,14 +464,14 @@ func _load_best_time() -> float:
 
 
 func _save_best_time() -> void:
-	var file := FileAccess.open("user://race_best_time.save", FileAccess.WRITE)
+	var file := FileAccess.open(("user://race_best_time%s.save" % _record_suffix), FileAccess.WRITE)
 	if file:
 		file.store_float(_best_time)
 		file.close()
 
 
 func _load_best_score() -> float:
-	var file := FileAccess.open("user://race_best_score.save", FileAccess.READ)
+	var file := FileAccess.open(("user://race_best_score%s.save" % _record_suffix), FileAccess.READ)
 	if file:
 		var value: float = file.get_float()
 		file.close()
@@ -478,7 +480,7 @@ func _load_best_score() -> float:
 
 
 func _save_best_score() -> void:
-	var file := FileAccess.open("user://race_best_score.save", FileAccess.WRITE)
+	var file := FileAccess.open(("user://race_best_score%s.save" % _record_suffix), FileAccess.WRITE)
 	if file:
 		file.store_float(_best_score)
 		file.close()
